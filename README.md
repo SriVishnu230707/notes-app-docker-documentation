@@ -54,7 +54,7 @@ values does not change credentials in an already initialized PostgreSQL volume.
 docker version
 docker compose up -d --wait db redis
 docker compose ps
-docker compose exec db sh -c 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+docker compose exec db sh -c 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 docker compose exec redis redis-cli ping
 ```
 
@@ -82,7 +82,9 @@ Browser -> localhost:8080 -> web -> api:8000 -> db:5432
 ```
 
 Startup order is `db + redis -> api -> web`. Each dependency must pass its health
-check before the next dependent service starts. Health checks are repeated, but
+check before the next dependent service starts. PostgreSQL is checked over TCP
+so its temporary initialization server does not report ready before the database
+can accept connections from the API. Health checks are repeated, but
 Compose does not automatically restart an unhealthy container or cascade later
 dependency failures. `restart: unless-stopped` handles container process exits.
 
