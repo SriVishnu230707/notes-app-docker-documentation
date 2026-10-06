@@ -28,18 +28,30 @@ services:
       retries: 20
     restart: unless-stopped
     networks: [notes]
-  api:
+  migrate:
     build: ./backend
-    environment:
+    command: [alembic, upgrade, head]
+    environment: &database_environment
       PGHOST: db
       PGPORT: '5432'
       PGDATABASE: ${POSTGRES_DB:?Copy .env.example to .env first}
       PGUSER: ${POSTGRES_USER:?Copy .env.example to .env first}
       PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: 'no'
+    networks: [notes]
+  api:
+    build: ./backend
+    environment:
+      <<: *database_environment
       REDIS_URL: redis://redis:6379/0
     ports:
       - '127.0.0.1:${API_PORT:-8000}:8000'
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       db:
         condition: service_healthy
       redis:
