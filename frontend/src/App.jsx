@@ -8,6 +8,7 @@ export default function App() {
   const [content, setContent] = useState('');
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
+  const [missingNote, setMissingNote] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -15,6 +16,14 @@ export default function App() {
   const [message, setMessage] = useState('');
   const titleField = useRef(null);
   const mutationInFlight = useRef(false);
+  const focusPending = useRef(false);
+
+  useEffect(() => {
+    if (focusPending.current && !busy && !loading && !loadError) {
+      titleField.current?.focus();
+      focusPending.current = false;
+    }
+  }, [busy, loading, loadError, selected]);
 
   const refreshActivity = useCallback(async (signal) => {
     try {
@@ -63,7 +72,10 @@ export default function App() {
     setTitle(note?.title || '');
     setContent(note?.content || '');
     setError('');
+    setMissingNote(false);
     setMessage('');
+    if (!note) setSearch('');
+    focusPending.current = true;
     titleField.current?.focus();
   }
 
@@ -71,7 +83,7 @@ export default function App() {
     event.preventDefault();
     if (mutationInFlight.current || !title.trim()) return;
     mutationInFlight.current = true;
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true); setError(''); setMissingNote(false); setMessage('');
     try {
       const note = await request(selected ? `/notes/${selected}` : '/notes', {
         method: selected ? 'PUT' : 'POST',
@@ -81,22 +93,31 @@ export default function App() {
       setNotes(previous => [note, ...previous.filter(item => item.id !== note.id)]);
       setMessage('Saved.');
       void refreshActivity();
-    } catch (err) { setError(err.message); }
+    } catch (err) { setError(err.message); setMissingNote(err.status === 404); }
     finally { mutationInFlight.current = false; setBusy(false); }
   }
 
   async function remove() {
     if (mutationInFlight.current || !selected || !window.confirm('Delete this note permanently?')) return;
     mutationInFlight.current = true;
-    setBusy(true); setError(''); setMessage('');
+    setBusy(true); setError(''); setMissingNote(false); setMessage('');
     try {
       await request(`/notes/${selected}`, { method: 'DELETE' });
       setNotes(previous => previous.filter(note => note.id !== selected));
       setSelected(null); setTitle(''); setContent(''); setMessage('Note deleted.');
       void refreshActivity();
-      titleField.current?.focus();
-    } catch (err) { setError(err.message); }
+      focusPending.current = true;
+    } catch (err) { setError(err.message); setMissingNote(err.status === 404); }
     finally { mutationInFlight.current = false; setBusy(false); }
+  }
+
+  function recoverDraft() {
+    setNotes(previous => previous.filter(note => note.id !== selected));
+    setSelected(null);
+    setMissingNote(false);
+    setError('');
+    setMessage('Draft preserved. Save it as a new note.');
+    focusPending.current = true;
   }
 
   const filtered = notes.filter(note => `${note.title} ${note.content}`.toLowerCase().includes(search.toLowerCase()));
@@ -132,6 +153,7 @@ export default function App() {
         <label className="sr-only" htmlFor="content">Note content</label>
         <textarea id="content" maxLength={50000} placeholder="Let your thoughts unfold here…" value={content} disabled={busy || loading || Boolean(loadError)} onChange={e => { setContent(e.target.value); setMessage(''); }} />
         {error && <p className="error" role="alert">{error}</p>}
+        {missingNote && <button className="retry" type="button" disabled={busy} onClick={recoverDraft}>Keep draft as a new note</button>}
         <div className="editor-bottom"><span role="status">{message || `${content.length.toLocaleString()} characters`}</span><div className="actions">
           {selected && <button className="delete" type="button" disabled={busy} onClick={remove}>Delete</button>}
           <button className="save" disabled={busy || loading || Boolean(loadError) || !title.trim() || !dirty}>{busy ? 'Working…' : 'Save note ↗'}</button>

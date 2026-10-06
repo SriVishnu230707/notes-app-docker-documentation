@@ -23,6 +23,13 @@ class NoteInput(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     content: str = Field(default="", max_length=50000)
 
+    @field_validator("title", "content")
+    @classmethod
+    def reject_null_character(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("Null characters are not allowed")
+        return value
+
     @field_validator("title")
     @classmethod
     def clean_title(cls, value: str) -> str:

@@ -284,7 +284,7 @@ persistence stores the count across normal restarts.
 
 ### API checks
 
-The test image adds HTTPX; it is excluded from the production image. Run the
+The test image adds HTTPX2; it is excluded from the production image. Run the
 HTTP contract and failure tests without starting database dependencies:
 
 ```powershell
@@ -416,3 +416,21 @@ When the engine is ready:
 5. Run the Step 2 database and Step 3 live API tests.
 
 Reference: [Playwright API mocking](https://playwright.dev/docs/mock).
+
+## Error review and regression checks
+
+See [the error review](docs/error-review.md) for the cross-layer fixes and
+verification limits. Request-helper checks can now be run from `frontend/` with
+`npm run test:unit`, alongside the browser tests. HTTP requests have a 15-second
+timeout, and successful responses are validated before being rendered.
+
+If a write times out or its connection is interrupted, the server may have
+committed it. The interface preserves the draft and asks you to reload notes
+before retrying; it does not retry mutations automatically. If a saved note has
+been deleted elsewhere, use **Keep draft as a new note** to preserve your edits.
+
+Application PostgreSQL connections now use a 10-second statement timeout and a
+5-second lock timeout. Migration connections keep their separate configuration.
+API validation rejects null characters in note strings before PostgreSQL sees
+them. The backend pins a compatible patched FastAPI/Starlette pair, and API
+tests use HTTPX2. Rebuild the backend image to apply dependency changes.

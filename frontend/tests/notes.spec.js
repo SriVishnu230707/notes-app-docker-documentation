@@ -7,7 +7,10 @@ async function mockApi(page, options = {}) {
     const path = new URL(req.url()).pathname;
     const reply = (status, json) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(json) });
     if (path === '/api/stats') return state.failStats ? reply(503, { detail: 'Activity unavailable' }) : reply(200, { writes: state.writes, redis_available: true });
-    if (req.method() === 'GET' && path === '/api/notes') return state.failLoad ? reply(503, { detail: 'Database is unavailable' }) : reply(200, state.notes);
+    if (req.method() === 'GET' && path === '/api/notes') {
+      if (state.badLoad) return reply(200, { notes: [] });
+      return state.failLoad ? reply(503, { detail: 'Database is unavailable' }) : reply(200, state.notes);
+    }
     if (state.failSave) return reply(503, { detail: 'Database is unavailable' });
     if (req.method() === 'POST') {
       const now = new Date().toISOString();
@@ -55,6 +58,7 @@ test('create, edit, search, reload and delete a note', async ({ page }) => {
   await page.getByRole('button', { name: 'Delete', exact: true }).click();
   await expect(page.getByRole('status')).toHaveText('Note deleted.');
   await expect(page.getByLabel('Note title')).toHaveValue('');
+  await expect(page.getByLabel('Note title')).toBeFocused();
   expect(errors).toEqual([]);
 });
 
@@ -133,4 +137,33 @@ test('desktop workspace renders without browser errors', async ({ page }) => {
   await expect(page.getByLabel('Note title')).toBeEnabled();
   await page.screenshot({ path: 'test-results/desktop.png', fullPage: true });
   expect(errors).toEqual([]);
+});
+
+test('malformed notes response shows a recoverable error instead of crashing', async ({ page }) => {
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  const state = await mockApi(page);
+  state.badLoad = true;
+  await page.goto('/');
+  await expect(page.getByRole('alert')).toContainText('unexpected response');
+  state.badLoad = false;
+  await page.getByRole('button', { name: 'Retry loading notes' }).click();
+  await expect(page.getByLabel('Note title')).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test('a deleted remote note can be recovered without losing the draft', async ({ page }) => {
+  const note = { id: '22222222-2222-4222-8222-222222222222', title: 'Existing note', content: 'Stored body', created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' };
+  const state = await mockApi(page, { notes: [note] });
+  await page.goto('/');
+  await page.getByRole('button', { name: /Existing note Stored body/ }).click();
+  await page.getByLabel('Note content').fill('Preserve these edits.');
+  state.notes = [];
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByRole('alert')).toHaveText('Note not found');
+  await page.getByRole('button', { name: 'Keep draft as a new note' }).click();
+  await expect(page.getByLabel('Note content')).toHaveValue('Preserve these edits.');
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByRole('status')).toHaveText('Saved.');
+  expect(state.notes[0].content).toBe('Preserve these edits.');
 });

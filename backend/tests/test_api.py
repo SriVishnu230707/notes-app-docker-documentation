@@ -81,7 +81,8 @@ class NotesApiTests(unittest.TestCase):
     def test_invalid_input_never_reaches_database(self):
         cases = [{}, {"title": ""}, {"title": " \t\n"}, {"title": "x" * 201},
                  {"title": None}, {"title": 123}, {"title": "OK", "content": None},
-                 {"title": "OK", "content": "x" * 50001}, {"title": "OK", "unknown": True}]
+                 {"title": "OK", "content": "x" * 50001}, {"title": "OK", "unknown": True},
+                 {"title": "Bad\x00title"}, {"title": "OK", "content": "Bad\x00content"}]
         for payload in cases:
             with self.subTest(payload_keys=list(payload)):
                 self.assertEqual(self.client.post("/api/notes", json=payload).status_code, 422)
