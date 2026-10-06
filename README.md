@@ -6,9 +6,9 @@ React + FastAPI + PostgreSQL + Redis, orchestrated with Docker Compose.
 
 Step 1 defines all four services, environment configuration, networking,
 persistent volumes, and dependency health checks. Step 2 adds the database layer,
-backend image and versioned migrations. API routes, frontend source and frontend
-dependency lockfiles will be added in subsequent steps. The full stack build
-becomes available after those steps; the database can be used independently now.
+backend image and versioned migrations. Step 3 adds the FastAPI routes and Redis
+activity tracking. Frontend source and its dependency lockfile will be added in
+Step 4. The database and API can be used independently now.
 
 ### Requirements
 
@@ -135,8 +135,8 @@ docker compose -f compose.yaml -f compose.dev.yaml up --build
 5. A **network** lets containers communicate through service names.
 6. A **volume** retains data independently of a container's lifecycle.
 
-Compose builds the database migration/API image from `backend/`; the API entry
-point will be added in Step 3. The web image will be built from `frontend/` in a
+Compose builds the database migration/API image from `backend/`. The web image
+will be built from `frontend/` in a
 later step. PostgreSQL and Redis
 use official images with explicit version tags. The application build contexts
 will include `.dockerignore` files excluding local dependencies and environment
@@ -185,7 +185,7 @@ add a new revision for each future schema change.
 ### Run database integration checks
 
 ```powershell
-docker compose run --rm migrate python -m unittest discover -s tests -v
+docker compose run --rm migrate python -m unittest discover -s tests -p test_database.py -v
 ```
 
 Checks cover the migration version, CRUD, UUID/timestamp defaults, timestamp
@@ -211,3 +211,107 @@ remains as documented in Step 1.
 References: [Alembic migration tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html),
 [PostgreSQL constraints](https://www.postgresql.org/docs/17/ddl-constraints.html),
 and [PostgreSQL triggers](https://www.postgresql.org/docs/17/plpgsql-trigger.html).
+
+## Step 3: FastAPI backend
+
+The API uses the Step 2 repository and schema. It does not create tables on
+startup. Compose runs migrations before starting Uvicorn. The backend runs as a
+non-root user, and each database operation uses its own transaction/connection.
+
+### Start the API without the frontend
+
+```powershell
+docker compose up --build -d --wait api
+docker compose ps -a
+docker compose logs --tail 100 migrate api
+Invoke-RestMethod http://localhost:8000/api/health
+```
+
+This starts the database, Redis, migration job and API. A successful migration
+job exits with code 0; it is not a continuously running service. Open
+<http://localhost:8000/docs> for the interactive API explorer or
+<http://localhost:8000/openapi.json> for its schema. Use your configured API port
+if it differs from 8000. Full-stack startup waits until the frontend is added.
+
+### Endpoints
+
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/notes` | `200`: notes, newest update first |
+| GET | `/api/notes/{id}` | `200`: one note; `404` if missing |
+| POST | `/api/notes` | `201`: created note and `Location` header |
+| PUT | `/api/notes/{id}` | `200`: replaced title/content; `404` if missing |
+| DELETE | `/api/notes/{id}` | `204`: empty body; `404` if missing |
+| GET | `/api/stats` | `200`: Redis write count and availability |
+| GET | `/api/health` | `200` when notes schema and Redis are reachable; otherwise `503` |
+
+POST and PUT require a string `title` of 1–200 characters, containing a
+non-whitespace character. Leading/trailing title whitespace is trimmed.
+`content` is a string up to 50,000 characters; omitting it supplies an empty
+string. PUT replaces the complete title/content pair, so omitted content clears
+the previous body. Nulls and unknown fields are rejected. Invalid input, malformed
+JSON and invalid UUIDs receive FastAPI's structured `422` validation response.
+
+Responses contain `id`, `title`, `content`, `created_at` and `updated_at`. UUIDs
+are strings in JSON, and timestamps include their timezone. Database connection
+errors return `503`; other database failures return a generic `500` without
+SQL or credentials in the response. The app is scoped to local single-user use.
+
+### Try the CRUD flow in PowerShell
+
+```powershell
+$apiBase = 'http://localhost:8000'
+$body = @{ title = 'My first note'; content = 'Built with FastAPI and Docker.' } | ConvertTo-Json
+$note = Invoke-RestMethod "$apiBase/api/notes" -Method Post -ContentType 'application/json' -Body $body
+Invoke-RestMethod "$apiBase/api/notes/$($note.id)"
+Invoke-RestMethod "$apiBase/api/notes"
+
+$editedBody = @{ title = 'Updated note'; content = 'Changes are saved in PostgreSQL.' } | ConvertTo-Json
+Invoke-RestMethod "$apiBase/api/notes/$($note.id)" -Method Put -ContentType 'application/json' -Body $editedBody
+Invoke-RestMethod "$apiBase/api/notes/$($note.id)" -Method Delete
+Invoke-RestMethod "$apiBase/api/stats"
+```
+
+### Redis activity behavior
+
+Successful create, update and delete operations increment `notes:write_count`
+after the database commit. Reads, validation failures and missing-note operations
+do not increment it. If Redis fails, a committed note operation still returns
+success; `/api/stats` returns `writes: null` and `redis_available: false`.
+The count is best-effort activity telemetry: database commits and Redis writes
+are separate operations, so an outage can cause missed counts. Redis append-only
+persistence stores the count across normal restarts.
+
+### API checks
+
+The test image adds HTTPX; it is excluded from the production image. Run the
+HTTP contract and failure tests without starting database dependencies:
+
+```powershell
+docker compose -f compose.yaml -f compose.test.yaml run --rm --build --no-deps api python -m unittest discover -s tests -p test_api.py -v
+```
+
+For a local Python environment, install both requirements files and run from
+`backend/`:
+
+```powershell
+python -m pip install -r requirements.txt -r requirements-test.txt
+python -m unittest discover -s tests -p test_api.py -v
+```
+
+For real PostgreSQL/Redis integration, first start the API as above, then run:
+
+```powershell
+docker compose -f compose.yaml -f compose.test.yaml run --rm --build --no-deps -e RUN_API_INTEGRATION=1 api python -m unittest discover -s tests -p test_api_integration.py -v
+```
+
+The integration test creates and deletes its own note, checks committed data
+through a second application instance, and verifies Redis write activity.
+It does not reset existing data or counters. It is skipped unless explicitly
+enabled. The 13 isolated HTTP tests passed during implementation, along with
+Python syntax, dependency compatibility and Compose configuration checks. Live
+PostgreSQL/Redis integration and Docker image builds remain unverified because
+this workstation's Docker Linux engine is unavailable.
+
+References: [FastAPI testing](https://fastapi.tiangolo.com/tutorial/testing/) and
+[FastAPI error handling](https://fastapi.tiangolo.com/tutorial/handling-errors/).

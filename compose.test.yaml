@@ -1,0 +1,6 @@
+# Build HTTP test dependencies without adding them to the production image.
+services:
+  api:
+    build:
+      context: ./backend
+      target: test
