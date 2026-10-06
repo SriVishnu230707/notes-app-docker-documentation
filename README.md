@@ -7,8 +7,9 @@ React + FastAPI + PostgreSQL + Redis, orchestrated with Docker Compose.
 Step 1 defines all four services, environment configuration, networking,
 persistent volumes, and dependency health checks. Step 2 adds the database layer,
 backend image and versioned migrations. Step 3 adds the FastAPI routes and Redis
-activity tracking. Frontend source and its dependency lockfile will be added in
-Step 4. The database and API can be used independently now.
+activity tracking. Step 4 adds the React frontend and its dependency lockfile.
+All application components are now present; full Docker runtime verification
+still requires a working Linux engine.
 
 ### Requirements
 
@@ -110,7 +111,7 @@ intentional reset.
 
 ### Later: run the complete application
 
-Once the application dependencies and images have been verified:
+Build and start all application services:
 
 ```powershell
 docker compose up --build -d --wait
@@ -135,11 +136,10 @@ docker compose -f compose.yaml -f compose.dev.yaml up --build
 5. A **network** lets containers communicate through service names.
 6. A **volume** retains data independently of a container's lifecycle.
 
-Compose builds the database migration/API image from `backend/`. The web image
-will be built from `frontend/` in a
-later step. PostgreSQL and Redis
+Compose builds the database migration/API image from `backend/` and the web
+image from `frontend/`. PostgreSQL and Redis
 use official images with explicit version tags. The application build contexts
-will include `.dockerignore` files excluding local dependencies and environment
+include `.dockerignore` files excluding local dependencies and environment
 files. Image tags are versioned but can be republished; digest pins and dependency
 lockfiles are needed for stricter reproducibility.
 
@@ -231,7 +231,7 @@ This starts the database, Redis, migration job and API. A successful migration
 job exits with code 0; it is not a continuously running service. Open
 <http://localhost:8000/docs> for the interactive API explorer or
 <http://localhost:8000/openapi.json> for its schema. Use your configured API port
-if it differs from 8000. Full-stack startup waits until the frontend is added.
+if it differs from 8000. Full-stack startup is available with Step 4.
 
 ### Endpoints
 
@@ -315,3 +315,104 @@ this workstation's Docker Linux engine is unavailable.
 
 References: [FastAPI testing](https://fastapi.tiangolo.com/tutorial/testing/) and
 [FastAPI error handling](https://fastapi.tiangolo.com/tutorial/handling-errors/).
+
+## Step 4: React notes interface
+
+The responsive notebook interface includes:
+
+- A sidebar with saved notes and case-insensitive title/content search.
+- A title field and content editor with the API's length limits.
+- Create, edit and delete actions with loading and error states.
+- An unsaved-edits indicator and confirmation when switching away from a draft.
+- Browser leave/reload protection while there are unsaved edits.
+- Delete confirmation and a retry button when the initial notes request fails.
+- Draft preservation after failed saves, and optional activity information.
+
+The frontend uses relative `/api` requests. In Docker, Nginx serves the React
+production build and forwards `/api/` to `api:8000`. In development, Vite proxies
+those requests to the same backend service. There are no database credentials
+in browser code. Fonts fall back to installed system fonts without requiring an
+external font service.
+
+### Run the complete stack
+
+From the project root, with `.env` configured and Docker Desktop running:
+
+```powershell
+docker compose up --build -d --wait
+docker compose ps -a
+```
+
+Open <http://localhost:8080>. To edit frontend and backend source with live reload:
+
+```powershell
+docker compose -f compose.yaml -f compose.dev.yaml up --build
+```
+
+The development browser address is also <http://localhost:8080>; the override
+maps the host web port to Vite's container port 5173. Changing package dependencies
+requires rebuilding the frontend image; source edits update through bind mounts.
+
+### Run the frontend outside Docker
+
+Requires Node.js 22 and a running API at <http://localhost:8000>.
+From `frontend/`:
+
+```powershell
+npm ci
+npm run dev
+```
+
+Open <http://localhost:5173>. If the API runs elsewhere, configure the Vite
+server-side proxy target before starting it:
+
+```powershell
+$env:VITE_API_PROXY_TARGET = 'http://localhost:8000'
+npm run dev
+```
+
+This value configures the development proxy; it is not a database credential or
+a production browser setting. The production Nginx proxy uses the Compose API
+service. A failed initial API request displays an error with a retry action.
+
+### Build and browser checks
+
+```powershell
+npm run build
+npx playwright install chromium
+npm test
+```
+
+Alternatively, use an installed Chrome browser without downloading Chromium:
+
+```powershell
+$env:PLAYWRIGHT_CHANNEL = 'chrome'
+npm test
+```
+
+Playwright starts and stops its own Vite server on port 5173. Tests use controlled
+API responses and do not require PostgreSQL or Redis. They cover CRUD, search,
+reload, discard confirmation, failed-save recovery, failed-load retry, activity
+failure, title validation, desktop rendering and mobile overflow. The tests do
+not prove real database persistence; use the Step 2/3 integration checks and
+the full-stack checklist below for that.
+
+The production build and all 8 browser tests passed during Step 4, with desktop
+and mobile screenshots inspected. npm reported no known dependency vulnerabilities
+at implementation time. `package-lock.json` is committed and Docker uses `npm ci`.
+Rollup is pinned to `4.63.6`: the resolved `4.64.0` version stalled during builds
+on this workstation, while the pinned version completed successfully.
+
+### Full-stack verification still pending
+
+Docker image builds and the live React → FastAPI → PostgreSQL/Redis flow remain
+unverified because the workstation's Docker Linux engine is unavailable.
+When the engine is ready:
+
+1. Start the stack and check that running services are healthy and migration exits 0.
+2. Create and edit a note in the browser, then reload to check saved content.
+3. Run `docker compose down` and start it again without deleting volumes.
+4. Confirm the note still exists, then delete it from the interface.
+5. Run the Step 2 database and Step 3 live API tests.
+
+Reference: [Playwright API mocking](https://playwright.dev/docs/mock).
