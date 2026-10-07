@@ -1,6 +1,14 @@
 name: notes-app
 services:
   db:
+    cpus: 1.0
+    mem_limit: 512m
+    pids_limit: 256
+    logging: &bounded_logging
+      driver: json-file
+      options:
+        max-size: '10m'
+        max-file: '3'
     image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Copy .env.example to .env first}
@@ -17,8 +25,12 @@ services:
     restart: unless-stopped
     networks: [notes]
   redis:
+    cpus: 0.5
+    mem_limit: 128m
+    pids_limit: 64
+    logging: *bounded_logging
     image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
-    command: [redis-server, --appendonly, 'yes']
+    command: [redis-server, --appendonly, 'yes', --maxmemory, 64mb, --maxmemory-policy, noeviction]
     volumes:
       - redis_data:/data
     healthcheck:
@@ -29,6 +41,10 @@ services:
     restart: unless-stopped
     networks: [notes]
   migrate:
+    cpus: 0.5
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *bounded_logging
     build: ./backend
     read_only: true
     tmpfs: [/tmp]
@@ -47,6 +63,10 @@ services:
     restart: 'no'
     networks: [notes]
   api:
+    cpus: 1.0
+    mem_limit: 256m
+    pids_limit: 128
+    logging: *bounded_logging
     build: ./backend
     read_only: true
     tmpfs: [/tmp]
@@ -73,6 +93,10 @@ services:
     restart: unless-stopped
     networks: [notes]
   web:
+    cpus: 0.5
+    mem_limit: 64m
+    pids_limit: 128
+    logging: *bounded_logging
     build: ./frontend
     security_opt: [no-new-privileges:true]
     ports:

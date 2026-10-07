@@ -5,6 +5,11 @@ PostgreSQL and Redis. Use Docker Desktop in Linux-container mode or a Linux
 Docker Engine, with Compose 2.24.4 or newer. Images target the architecture of
 the packaging machine (GitHub CI packages linux/amd64).
 
+The supplied Compose configuration includes CPU/memory/process ceilings and
+rotated logs. `OPERATIONS.md` explains the resource profile and maintenance.
+Its script commands are available in the Git repository; no scripts or source
+installation are required for the bundle startup instructions below.
+
 Extract the complete artifact into an empty directory. In PowerShell 7:
 
 ```powershell

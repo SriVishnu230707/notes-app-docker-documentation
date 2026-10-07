@@ -505,6 +505,22 @@ Backups include PostgreSQL notes and a checksum manifest. Restore uses a
 separate project; omit `-VerifyOnly` to inspect the recovered app on port 19080.
 Redis activity resets in recovered copies. See [the recovery runbook](docs/phase-7-backup-recovery.md).
 
+## Phase 8: operational readiness and final handoff
+
+The full eight-phase project is complete for local operation. Containers have
+CPU/memory/process ceilings and rotated logs. A disposable concurrent-load
+test checks CRUD, edit conflicts, Redis counts and Engine resource settings.
+
+```powershell
+./scripts/status.ps1
+./scripts/verify-load.ps1
+```
+
+See [the final operations runbook](docs/phase-8-operations.md) for monitoring,
+troubleshooting, upgrades, rollback and the complete phase lineup.
+See [Phase 8 verification results](docs/phase-8-verification.md) for the local
+load measurements and data-preservation checks.
+
 ## Error review and regression checks
 
 See [the Phase 6/7 debug review](docs/phase-6-7-debug-review.md) for release

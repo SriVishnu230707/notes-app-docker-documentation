@@ -9,7 +9,7 @@ $checkoutRevision = & git -C $root rev-parse HEAD
 if ($LASTEXITCODE -ne 0 -or $checkoutRevision -notmatch '^[a-f0-9]{40}$') { throw 'A committed Git checkout is required.' }
 if (-not $Revision) { $Revision = $checkoutRevision }
 if ($Revision -cne $checkoutRevision) { throw 'Release revision must match the checked-out Git HEAD.' }
-$changes = & git -C $root status --porcelain --untracked-files=normal -- backend frontend compose.yaml compose.release.yaml .env.example docs/release-bundle.md
+$changes = & git -C $root status --porcelain --untracked-files=normal -- backend frontend compose.yaml compose.release.yaml .env.example docs/release-bundle.md docs/phase-8-operations.md
 if ($LASTEXITCODE -ne 0) { throw 'Could not verify release source status.' }
 if ($changes) { throw 'Release source/configuration has uncommitted changes. Commit them before exporting.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root "artifacts/releases/$Revision" }
@@ -49,5 +49,6 @@ foreach ($tag in @($api, $web, $dbTag, $redisTag)) { $images[$tag] = Invoke-Note
 $manifest = @{ revision=$Revision; created_at_utc=[DateTime]::UtcNow.ToString('o'); sha256=(Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant(); images=$images }
 $manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath "$destination/release.json" -Encoding utf8
 Copy-Item -LiteralPath "$root/docs/release-bundle.md" -Destination "$destination/README.md"
+Copy-Item -LiteralPath "$root/docs/phase-8-operations.md" -Destination "$destination/OPERATIONS.md"
 Write-Host "PASS: release bundle written to $destination"
 return [pscustomobject]@{ Directory=$destination; ArchivePath=$archive; Revision=$Revision }

@@ -41,6 +41,17 @@ jobs:
       - name: Backup recovery and corruption verification
         shell: pwsh
         run: ./scripts/verify-recovery.ps1
+      - name: Bounded concurrent load and Engine resource limits
+        shell: pwsh
+        run: ./scripts/verify-load.ps1
+      - name: Load verification report
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: load-report
+          path: test-results/notes-load-*/report.json
+          retention-days: 14
+          if-no-files-found: ignore
       - name: Failed browser diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -72,6 +83,7 @@ jobs:
             artifacts/releases/${{ github.sha }}/.env.example
             artifacts/releases/${{ github.sha }}/.env.images
             artifacts/releases/${{ github.sha }}/README.md
+            artifacts/releases/${{ github.sha }}/OPERATIONS.md
           include-hidden-files: true
           compression-level: 0
           if-no-files-found: error
