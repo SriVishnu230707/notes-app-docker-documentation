@@ -8,8 +8,8 @@ Step 1 defines all four services, environment configuration, networking,
 persistent volumes, and dependency health checks. Step 2 adds the database layer,
 backend image and versioned migrations. Step 3 adds the FastAPI routes and Redis
 activity tracking. Step 4 adds the React frontend and its dependency lockfile.
-All application components are now present; full Docker runtime verification
-still requires a working Linux engine.
+Step 5 adds automated verification of the real Docker stack, production browser
+flow, and volume persistence across container replacement.
 
 ### Requirements
 
@@ -109,7 +109,7 @@ docker compose down
 `docker compose down -v` deletes the volumes and their data; use it only for an
 intentional reset.
 
-### Later: run the complete application
+### Run the complete application
 
 Build and start all application services:
 
@@ -195,9 +195,7 @@ existing notes. The checks require the migration to have been applied first.
 
 Implementation validation passed Python syntax checks, dependency compatibility,
 offline upgrade/downgrade SQL generation, and both Compose configurations. Live
-migration execution and integration tests are not yet verified: this workstation's
-Docker Linux engine was unavailable when Step 2 was implemented. Run the commands
-above after Docker Desktop's engine is ready.
+migration execution and PostgreSQL integration tests also passed during Step 5.
 
 The initial migration expects a fresh schema. If you previously created a notes
 table manually or with the local prototype, migration will fail rather than
@@ -310,8 +308,7 @@ through a second application instance, and verifies Redis write activity.
 It does not reset existing data or counters. It is skipped unless explicitly
 enabled. The 13 isolated HTTP tests passed during implementation, along with
 Python syntax, dependency compatibility and Compose configuration checks. Live
-PostgreSQL/Redis integration and Docker image builds remain unverified because
-this workstation's Docker Linux engine is unavailable.
+PostgreSQL/Redis integration and Docker image builds also passed during Step 5.
 
 References: [FastAPI testing](https://fastapi.tiangolo.com/tutorial/testing/) and
 [FastAPI error handling](https://fastapi.tiangolo.com/tutorial/handling-errors/).
@@ -403,19 +400,77 @@ at implementation time. `package-lock.json` is committed and Docker uses `npm ci
 Rollup is pinned to `4.63.6`: the resolved `4.64.0` version stalled during builds
 on this workstation, while the pinned version completed successfully.
 
-### Full-stack verification still pending
+### Real Docker browser checks
 
-Docker image builds and the live React → FastAPI → PostgreSQL/Redis flow remain
-unverified because the workstation's Docker Linux engine is unavailable.
-When the engine is ready:
-
-1. Start the stack and check that running services are healthy and migration exits 0.
-2. Create and edit a note in the browser, then reload to check saved content.
-3. Run `docker compose down` and start it again without deleting volumes.
-4. Confirm the note still exists, then delete it from the interface.
-5. Run the Step 2 database and Step 3 live API tests.
+Step 5 adds a separate browser suite using the production frontend and real API.
+It runs without Vite or mocked requests; see the commands below.
 
 Reference: [Playwright API mocking](https://playwright.dev/docs/mock).
+
+## Step 5: automated Docker integration and persistence verification
+
+See [the verification results](docs/step-5-verification.md) for the completed run.
+
+Run from the project root using **PowerShell 7+** (`pwsh`) and Docker Desktop:
+
+```powershell
+# All Docker/backend and HTTP persistence checks; no local Python or Node needed.
+pwsh -File ./scripts/verify-stack.ps1
+
+# Also test the real browser UI. Requires Node.js 22 and installed Google Chrome.
+$env:PLAYWRIGHT_CHANNEL = 'chrome'
+pwsh -File ./scripts/verify-stack.ps1 -BrowserTests
+
+# Choose unused ports if the default verification ports are occupied.
+pwsh -File ./scripts/verify-stack.ps1 -WebPort 28080 -ApiPort 28000
+```
+
+The script creates a uniquely named `notes-check-<random>` Compose project with
+its own credentials, network, containers and volumes. It uses ports 18080/18000
+by default, checks for conflicts, and overrides ambient database/port values
+only for its process. It leaves your regular `notes-app` containers and notes
+untouched. Temporary environment values are restored after the run.
+
+The verification covers:
+
+1. Production image builds, startup health checks, migrations and Nginx syntax.
+2. 13 isolated API contract tests, 7 real PostgreSQL tests, and 1 real API/Redis
+   integration test inside the backend test image.
+3. HTTP requests through Nginx: dependency health, React HTML, missing-asset 404,
+   create, update and delete, plus the Redis write count.
+4. Removal and recreation of all test containers **without removing volumes**.
+   The PostgreSQL container ID must change while the saved note, original creation
+   timestamp and Redis count stay intact. Re-running migrations must succeed.
+5. With `-BrowserTests`: 8 request-helper tests and 2 real browser tests covering
+   create/edit/search/reload/delete, PostgreSQL reads, Redis activity, dependency
+   health, JavaScript delivery and production cache headers.
+
+On success or failure, cleanup removes **only that run's temporary containers,
+network and volumes**. Shared base images and build caches remain available.
+Failed Docker checks print recent container logs; failed browser checks retain
+screenshots and traces under `frontend/test-results/`. A cleanup failure is
+reported as an error with the temporary project name. An interrupted/killed
+process may require manual cleanup of that project.
+
+You can also run the browser suite against your existing running stack:
+
+```powershell
+Set-Location frontend
+npm ci
+$env:PLAYWRIGHT_CHANNEL = 'chrome'
+$env:NOTES_E2E_BASE_URL = 'http://127.0.0.1:8080'
+npm run test:live
+```
+
+This suite creates and removes only its own uniquely titled note. It increments
+the real Redis activity counter. To use Playwright's bundled Chromium instead
+of Chrome, install it with `npx playwright install chromium` and unset
+`PLAYWRIGHT_CHANNEL`. Existing mocked browser tests remain available with
+`npm test`; they are separate from the live suite.
+
+References: [Compose startup and health waits](https://docs.docker.com/reference/cli/docker/compose/up/),
+[Compose teardown and volume behavior](https://docs.docker.com/reference/cli/docker/compose/down/),
+and [Playwright configuration](https://playwright.dev/docs/test-configuration).
 
 ## Error review and regression checks
 
