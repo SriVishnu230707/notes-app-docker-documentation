@@ -3,7 +3,7 @@ services:
   api:
     command: [uvicorn, app.main:app, --host, 0.0.0.0, --port, '8000', --reload]
     volumes:
-      - ./backend/app:/app/app
+      - ./backend/app:/app/app:ro
   web:
     build:
       context: ./frontend
@@ -13,7 +13,7 @@ services:
     ports: !override
       - '127.0.0.1:${WEB_PORT:-8080}:5173'
     volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/index.html:/app/index.html
+      - ./frontend/src:/app/src:ro
+      - ./frontend/index.html:/app/index.html:ro
     healthcheck:
       test: [CMD, wget, -q, --spider, http://127.0.0.1:5173/]

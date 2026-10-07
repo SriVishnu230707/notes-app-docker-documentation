@@ -9,6 +9,7 @@ export default function App() {
   const [search, setSearch] = useState('');
   const [error, setError] = useState('');
   const [missingNote, setMissingNote] = useState(false);
+  const [conflict, setConflict] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -73,6 +74,7 @@ export default function App() {
     setContent(note?.content || '');
     setError('');
     setMissingNote(false);
+    setConflict(false);
     setMessage('');
     if (!note) setSearch('');
     focusPending.current = true;
@@ -81,43 +83,51 @@ export default function App() {
 
   async function save(event) {
     event.preventDefault();
-    if (mutationInFlight.current || !title.trim()) return;
+    if (mutationInFlight.current || conflict || !title.trim()) return;
     mutationInFlight.current = true;
     setBusy(true); setError(''); setMissingNote(false); setMessage('');
     try {
       const note = await request(selected ? `/notes/${selected}` : '/notes', {
         method: selected ? 'PUT' : 'POST',
+        headers: selected && original ? { 'If-Match': `"${original.updated_at}"` } : {},
         body: JSON.stringify({ title: title.trim(), content }),
       });
       setSelected(note.id); setTitle(note.title); setContent(note.content);
       setNotes(previous => [note, ...previous.filter(item => item.id !== note.id)]);
       setMessage('Saved.');
       void refreshActivity();
-    } catch (err) { setError(err.message); setMissingNote(err.status === 404); }
+    } catch (err) { setError(err.message); setMissingNote(err.status === 404); setConflict(err.status === 412); }
     finally { mutationInFlight.current = false; setBusy(false); }
   }
 
   async function remove() {
-    if (mutationInFlight.current || !selected || !window.confirm('Delete this note permanently?')) return;
+    if (mutationInFlight.current || conflict || !selected || !window.confirm('Delete this note permanently?')) return;
     mutationInFlight.current = true;
     setBusy(true); setError(''); setMissingNote(false); setMessage('');
     try {
-      await request(`/notes/${selected}`, { method: 'DELETE' });
+      await request(`/notes/${selected}`, { method: 'DELETE', headers: original ? { 'If-Match': `"${original.updated_at}"` } : {} });
       setNotes(previous => previous.filter(note => note.id !== selected));
       setSelected(null); setTitle(''); setContent(''); setMessage('Note deleted.');
       void refreshActivity();
       focusPending.current = true;
-    } catch (err) { setError(err.message); setMissingNote(err.status === 404); }
+    } catch (err) { setError(err.message); setMissingNote(err.status === 404); setConflict(err.status === 412); }
     finally { mutationInFlight.current = false; setBusy(false); }
   }
 
   function recoverDraft() {
-    setNotes(previous => previous.filter(note => note.id !== selected));
+    if (!conflict) setNotes(previous => previous.filter(note => note.id !== selected));
     setSelected(null);
     setMissingNote(false);
+    setConflict(false);
     setError('');
     setMessage('Draft preserved. Save it as a new note.');
     focusPending.current = true;
+  }
+
+  async function reloadConflict() {
+    if (!window.confirm('Discard your draft and reload saved notes?')) return;
+    setSelected(null); setTitle(''); setContent(''); setError(''); setConflict(false);
+    await loadNotes();
   }
 
   const filtered = notes.filter(note => `${note.title} ${note.content}`.toLowerCase().includes(search.toLowerCase()));
@@ -153,10 +163,11 @@ export default function App() {
         <label className="sr-only" htmlFor="content">Note content</label>
         <textarea id="content" maxLength={50000} placeholder="Let your thoughts unfold here…" value={content} disabled={busy || loading || Boolean(loadError)} onChange={e => { setContent(e.target.value); setMessage(''); }} />
         {error && <p className="error" role="alert">{error}</p>}
-        {missingNote && <button className="retry" type="button" disabled={busy} onClick={recoverDraft}>Keep draft as a new note</button>}
+        {(missingNote || conflict) && <button className="retry" type="button" disabled={busy} onClick={recoverDraft}>Keep draft as a new note</button>}
+        {conflict && <button className="retry" type="button" disabled={busy} onClick={reloadConflict}>Reload saved notes</button>}
         <div className="editor-bottom"><span role="status">{message || `${content.length.toLocaleString()} characters`}</span><div className="actions">
-          {selected && <button className="delete" type="button" disabled={busy} onClick={remove}>Delete</button>}
-          <button className="save" disabled={busy || loading || Boolean(loadError) || !title.trim() || !dirty}>{busy ? 'Working…' : 'Save note ↗'}</button>
+          {selected && <button className="delete" type="button" disabled={busy || conflict} onClick={remove}>Delete</button>}
+          <button className="save" disabled={busy || conflict || loading || Boolean(loadError) || !title.trim() || !dirty}>{busy ? 'Working…' : 'Save note ↗'}</button>
         </div></div>
       </form>
       <div className="reflection">Small thoughts. Big possibilities.</div>

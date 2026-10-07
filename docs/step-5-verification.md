@@ -1,5 +1,9 @@
 # Step 5 verification results
 
+These are the initial Step 5 results. The subsequent
+[security and logic review](security-and-logic-review.md) adds regressions and
+records verification against updated runtime images.
+
 Verified on 2026-10-07 using Docker Desktop's Linux engine on Windows,
 Docker Engine 28.3.2, Compose 2.38.2, PowerShell 7 and installed Google Chrome.
 

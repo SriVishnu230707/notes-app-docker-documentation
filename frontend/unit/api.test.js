@@ -52,3 +52,13 @@ test('accepts empty DELETE responses but rejects empty successful reads', async 
   assert.equal(await request('/notes/id', { method: 'DELETE' }), null);
   await assert.rejects(request('/notes'), /unexpected response/);
 });
+
+test('normalizes method casing and rejects duplicate note IDs', async () => {
+  globalThis.fetch = async (_, options) => {
+    assert.equal(options.method, 'DELETE');
+    return new Response(null, { status: 204 });
+  };
+  assert.equal(await request('/notes/id', { method: 'delete' }), null);
+  globalThis.fetch = async () => response([note, note]);
+  await assert.rejects(request('/notes'), /unexpected response/);
+});

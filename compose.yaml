@@ -1,7 +1,7 @@
 name: notes-app
 services:
   db:
-    image: postgres:17.6-alpine
+    image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
     environment:
       POSTGRES_DB: ${POSTGRES_DB:?Copy .env.example to .env first}
       POSTGRES_USER: ${POSTGRES_USER:?Copy .env.example to .env first}
@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
     networks: [notes]
   redis:
-    image: redis:7.4.5-alpine
+    image: redis:7.4.11-alpine@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
     command: [redis-server, --appendonly, 'yes']
     volumes:
       - redis_data:/data
@@ -30,6 +30,10 @@ services:
     networks: [notes]
   migrate:
     build: ./backend
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     command: [alembic, upgrade, head]
     environment: &database_environment
       PGHOST: db
@@ -44,6 +48,10 @@ services:
     networks: [notes]
   api:
     build: ./backend
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     environment:
       <<: *database_environment
       REDIS_URL: redis://redis:6379/0
@@ -66,6 +74,7 @@ services:
     networks: [notes]
   web:
     build: ./frontend
+    security_opt: [no-new-privileges:true]
     ports:
       - '127.0.0.1:${WEB_PORT:-8080}:80'
     depends_on:

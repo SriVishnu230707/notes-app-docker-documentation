@@ -6,14 +6,16 @@ from datetime import datetime
 from uuid import UUID
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from redis import Redis
 from redis.exceptions import RedisError
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import repository
 from app.database import database
+from app.security import LocalApiSecurity
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +75,25 @@ def create_app(connection_factory=database, redis_client=None) -> FastAPI:
         description="Local notes stored in PostgreSQL, with Redis write activity.",
         lifespan=lifespan,
     )
+    app.add_middleware(LocalApiSecurity)
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "api"], www_redirect=False)
+
+    def expected_version(value):
+        if value is None:
+            return None
+        try:
+            if not (value.startswith('"') and value.endswith('"')):
+                raise ValueError()
+            version = datetime.fromisoformat(value[1:-1].replace("Z", "+00:00"))
+            if version.tzinfo is None:
+                raise ValueError()
+            return version
+        except ValueError:
+            raise HTTPException(400, "Invalid note version")
+
+    def set_etag(response, note):
+        timestamp = Note.model_validate(note).model_dump(mode="json")["updated_at"]
+        response.headers["ETag"] = f'"{timestamp}"'
 
     @app.exception_handler(psycopg.Error)
     async def database_error(request: Request, exc: psycopg.Error):
@@ -115,11 +136,12 @@ def create_app(connection_factory=database, redis_client=None) -> FastAPI:
             return repository.list_notes(conn)
 
     @app.get("/api/notes/{note_id}", response_model=Note, tags=["notes"])
-    def get_note(note_id: UUID):
+    def get_note(note_id: UUID, response: Response):
         with connection_factory() as conn:
             result = repository.get_note(conn, note_id)
         if result is None:
             raise HTTPException(404, "Note not found")
+        set_etag(response, result)
         return result
 
     @app.post("/api/notes", response_model=Note, status_code=201, tags=["notes"])
@@ -128,21 +150,29 @@ def create_app(connection_factory=database, redis_client=None) -> FastAPI:
             result = repository.create_note(conn, note.title, note.content)
         record_write()
         response.headers["Location"] = f"/api/notes/{result['id']}"
+        set_etag(response, result)
         return result
 
     @app.put("/api/notes/{note_id}", response_model=Note, tags=["notes"])
-    def update_note(note_id: UUID, note: NoteInput):
+    def update_note(note_id: UUID, note: NoteInput, response: Response, if_match: str | None = Header(default=None)):
+        version = expected_version(if_match)
         with connection_factory() as conn:
-            result = repository.update_note(conn, note_id, note.title, note.content)
+            result = repository.update_note(conn, note_id, note.title, note.content) if version is None else repository.update_note(conn, note_id, note.title, note.content, version)
+            if result is None and version is not None and repository.get_note(conn, note_id) is not None:
+                raise HTTPException(412, "This note changed elsewhere. Reload notes before saving or deleting.")
         if result is None:
             raise HTTPException(404, "Note not found")
         record_write()
+        set_etag(response, result)
         return result
 
     @app.delete("/api/notes/{note_id}", status_code=204, tags=["notes"])
-    def delete_note(note_id: UUID):
+    def delete_note(note_id: UUID, if_match: str | None = Header(default=None)):
+        version = expected_version(if_match)
         with connection_factory() as conn:
-            result = repository.delete_note(conn, note_id)
+            result = repository.delete_note(conn, note_id) if version is None else repository.delete_note(conn, note_id, version)
+            if result is None and version is not None and repository.get_note(conn, note_id) is not None:
+                raise HTTPException(412, "This note changed elsewhere. Reload notes before saving or deleting.")
         if result is None:
             raise HTTPException(404, "Note not found")
         record_write()

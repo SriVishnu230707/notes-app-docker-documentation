@@ -31,7 +31,7 @@ class NotesApiTests(unittest.TestCase):
         self.mocks["list_notes"].return_value = [self.note]
         for name in ("create_note", "get_note", "update_note", "delete_note"):
             self.mocks[name].return_value = self.note
-        self.client = self.enterContext(TestClient(create_app(self.connect, self.activity)))
+        self.client = self.enterContext(TestClient(create_app(self.connect, self.activity), base_url="http://localhost"))
 
     @contextmanager
     def connect(self):
@@ -146,6 +146,54 @@ class NotesApiTests(unittest.TestCase):
         self.assertEqual(spec["info"]["title"], "Notes API")
         self.assertIn("post", spec["paths"]["/api/notes"])
         self.assertIn("get", spec["paths"]["/api/notes/{note_id}"])
+
+    def test_untrusted_host_is_rejected_before_database_access(self):
+        response = self.client.get('/api/notes', headers={'Host': 'attacker.example'})
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(self.events, [])
+
+    def test_cross_origin_writes_are_rejected(self):
+        for origin in ('https://attacker.example', 'null', 'http://localhost:9999'):
+            self.assertEqual(self.client.post('/api/notes', json={'title': 'Bad'}, headers={'Origin': origin}).status_code, 403)
+            self.assertEqual(self.client.delete(self.path, headers={'Origin': origin}).status_code, 403)
+        self.assertEqual(self.client.delete(self.path, headers={'Sec-Fetch-Site': 'cross-site'}).status_code, 403)
+        self.assertEqual(self.events, [])
+        self.assertEqual(self.client.post('/api/notes', json={'title': 'Good'}, headers={'Origin': 'http://localhost:80'}).status_code, 201)
+
+    def test_simple_browser_payloads_are_rejected(self):
+        for content_type in ('text/plain', 'application/x-www-form-urlencoded', 'multipart/form-data'):
+            self.assertEqual(self.client.post('/api/notes', content='{"title":"Bad"}', headers={'Content-Type': content_type}).status_code, 415)
+        self.assertEqual(self.client.post('/api/notes', content='{"title":"Bad"}').status_code, 415)
+        self.assertEqual(self.events, [])
+
+    def test_oversized_declared_and_streamed_requests_are_rejected(self):
+        headers = {'Content-Type': 'application/json'}
+        self.assertEqual(self.client.post('/api/notes', content=b'x' * (1024 * 1024 + 1), headers=headers).status_code, 413)
+        self.assertEqual(self.client.post('/api/notes', content=iter([b'x' * 600000, b'y' * 600000]), headers=headers).status_code, 413)
+        self.assertEqual(self.events, [])
+
+    def test_api_response_security_headers(self):
+        response = self.client.get('/api/notes')
+        self.assertEqual(response.headers['cache-control'], 'no-store')
+        self.assertEqual(response.headers['x-content-type-options'], 'nosniff')
+        self.assertEqual(response.headers['x-frame-options'], 'DENY')
+
+    def test_stale_update_and_delete_fail_without_activity(self):
+        self.mocks['update_note'].return_value = None
+        self.mocks['delete_note'].return_value = None
+        etag = self.client.get(self.path).headers['etag']
+        self.events.clear()
+        self.assertEqual(self.client.put(self.path, json={'title': 'Stale'}, headers={'If-Match': etag}).status_code, 412)
+        self.assertEqual(self.client.delete(self.path, headers={'If-Match': etag}).status_code, 412)
+        self.activity.incr.assert_not_called()
+        self.assertEqual(self.events, ['rollback', 'rollback'])
+
+    def test_invalid_version_is_rejected_and_missing_note_stays_404(self):
+        self.assertEqual(self.client.put(self.path, json={'title': 'Bad'}, headers={'If-Match': 'bad'}).status_code, 400)
+        self.assertEqual(self.events, [])
+        self.mocks['delete_note'].return_value = None
+        self.mocks['get_note'].return_value = None
+        self.assertEqual(self.client.delete(self.path, headers={'If-Match': '"2026-10-07T00:00:00Z"'}).status_code, 404)
 
 
 if __name__ == "__main__":

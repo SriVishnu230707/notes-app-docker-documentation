@@ -18,15 +18,18 @@ def get_note(conn, note_id):
     return conn.execute("SELECT * FROM notes WHERE id = %s", (note_id,)).fetchone()
 
 
-def update_note(conn, note_id, title: str, content: str):
+def update_note(conn, note_id, title: str, content: str, expected_updated_at=None):
     # PostgreSQL's trigger maintains updated_at for every writer.
+    condition = " AND updated_at = %s" if expected_updated_at is not None else ""
+    values = (title, content, note_id) + ((expected_updated_at,) if expected_updated_at is not None else ())
     return conn.execute(
-        "UPDATE notes SET title = %s, content = %s WHERE id = %s RETURNING *",
-        (title, content, note_id),
+        "UPDATE notes SET title = %s, content = %s WHERE id = %s" + condition + " RETURNING *", values,
     ).fetchone()
 
 
-def delete_note(conn, note_id):
+def delete_note(conn, note_id, expected_updated_at=None):
+    condition = " AND updated_at = %s" if expected_updated_at is not None else ""
+    values = (note_id,) + ((expected_updated_at,) if expected_updated_at is not None else ())
     return conn.execute(
-        "DELETE FROM notes WHERE id = %s RETURNING id", (note_id,)
+        "DELETE FROM notes WHERE id = %s" + condition + " RETURNING id", values
     ).fetchone()

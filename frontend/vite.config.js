@@ -7,6 +7,7 @@ export default defineConfig({
     port: 5173,
     strictPort: true,
     watch: { usePolling: true },
-    proxy: { '/api': process.env.VITE_API_PROXY_TARGET || 'http://localhost:8000' },
+    // Preserve the browser-facing host/port for the API's same-origin checks.
+    proxy: { '/api': { target: process.env.VITE_API_PROXY_TARGET || 'http://localhost:8000', changeOrigin: false } },
   },
 });

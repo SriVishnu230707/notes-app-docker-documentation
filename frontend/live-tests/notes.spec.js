@@ -66,6 +66,8 @@ test('production assets and live dependency health are reachable', async ({ requ
   const html = await request.get('/');
   expect(html.status()).toBe(200);
   expect(html.headers()['cache-control']).toContain('no-cache');
+  expect(html.headers()['content-security-policy']).toContain("frame-ancestors 'none'");
+  expect(html.headers()['x-content-type-options']).toBe('nosniff');
   const text = await html.text();
   const asset = text.match(/src="(\/assets\/[^" ]+\.js)"/);
   expect(asset).not.toBeNull();
@@ -73,6 +75,42 @@ test('production assets and live dependency health are reachable', async ({ requ
   expect(javascript.status()).toBe(200);
   expect(javascript.headers()['content-type']).toMatch(/javascript/);
   expect(javascript.headers()['cache-control']).toContain('immutable');
+  expect(javascript.headers()['content-security-policy']).toContain("script-src 'self'");
   const missing = await request.get('/assets/missing-live-check.js');
   expect(missing.status()).toBe(404);
+  expect(missing.headers()['x-frame-options']).toBe('DENY');
+  expect((await request.get('/api/notes', { headers: { Host: 'attacker.example' } })).status()).toBe(400);
+  expect((await request.post('/api/notes', { headers: { Origin: 'https://attacker.example' }, data: { title: 'Must not save' } })).status()).toBe(403);
+});
+
+test('two tabs cannot overwrite or delete a newer note version', async ({ page, context, request }) => {
+  const title = `Conflict check ${randomUUID()}`;
+  const created = await request.post('/api/notes', { data: { title, content: 'Original' } });
+  expect(created.status()).toBe(201);
+  const noteId = (await created.json()).id;
+  const second = await context.newPage();
+  try {
+    for (const tab of [page, second]) {
+      await tab.goto('/');
+      await tab.getByLabel('Search your notes').fill(title);
+      await tab.getByRole('navigation', { name: 'Notes' }).getByRole('button', { name: new RegExp(title) }).click();
+    }
+    await page.getByLabel('Note content').fill('First tab saved');
+    await page.getByRole('button', { name: 'Save note' }).click();
+    await expect(page.getByRole('status')).toHaveText('Saved.');
+    await second.getByLabel('Note content').fill('Competing draft');
+    await second.getByRole('button', { name: 'Save note' }).click();
+    await expect(second.getByRole('alert')).toContainText('changed elsewhere');
+    await expect(second.getByLabel('Note content')).toHaveValue('Competing draft');
+    await expect(second.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+    const stored = await request.get(`/api/notes/${noteId}`);
+    expect((await stored.json()).content).toBe('First tab saved');
+    second.once('dialog', dialog => dialog.accept());
+    await second.getByRole('button', { name: 'Reload saved notes' }).click();
+    await second.getByRole('navigation', { name: 'Notes' }).getByRole('button', { name: new RegExp(title) }).click();
+    await expect(second.getByLabel('Note content')).toHaveValue('First tab saved');
+  } finally {
+    await second.close();
+    expect([204, 404]).toContain((await request.delete(`/api/notes/${noteId}`)).status());
+  }
 });

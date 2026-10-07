@@ -140,8 +140,10 @@ Compose builds the database migration/API image from `backend/` and the web
 image from `frontend/`. PostgreSQL and Redis
 use official images with explicit version tags. The application build contexts
 include `.dockerignore` files excluding local dependencies and environment
-files. Image tags are versioned but can be republished; digest pins and dependency
-lockfiles are needed for stricter reproducibility.
+files. Official runtime images now use version tags plus verified manifest
+digests; future runtime patches require explicit digest updates. The frontend
+dependency lockfile is committed. Backend requirements pin direct dependencies;
+transitive dependency resolution is not fully locked.
 
 References: [Compose networking](https://docs.docker.com/compose/how-tos/networking/),
 [dependency startup](https://docs.docker.com/compose/how-tos/startup-order/), and
@@ -181,6 +183,10 @@ stored in `alembic.ini`. Alembic records the applied revision in `alembic_versio
 PostgreSQL applies the migration transactionally, and an advisory lock serializes
 concurrent migration runners. Completed migrations should remain unchanged;
 add a new revision for each future schema change.
+
+Migration `0002_monotonic_note_versions` subsequently makes `updated_at` strictly
+advance on each update for optimistic concurrency checks. It replaces the trigger
+function without dropping notes or editing the initial migration.
 
 ### Run database integration checks
 
@@ -251,7 +257,11 @@ the previous body. Nulls and unknown fields are rejected. Invalid input, malform
 JSON and invalid UUIDs receive FastAPI's structured `422` validation response.
 
 Responses contain `id`, `title`, `content`, `created_at` and `updated_at`. UUIDs
-are strings in JSON, and timestamps include their timezone. Database connection
+are strings in JSON, and timestamps include their timezone. GET-one, POST and
+PUT return an `ETag` derived from `updated_at`. The browser sends this value in
+`If-Match` on PUT/DELETE; stale versions receive `412` without changing data.
+Command-line writes without `If-Match` remain supported but do not prevent
+concurrent overwrites. Database connection
 errors return `503`; other database failures return a generic `500` without
 SQL or credentials in the response. The app is scoped to local single-user use.
 
@@ -324,6 +334,8 @@ The responsive notebook interface includes:
 - Browser leave/reload protection while there are unsaved edits.
 - Delete confirmation and a retry button when the initial notes request fails.
 - Draft preservation after failed saves, and optional activity information.
+- Protection against stale saves/deletes from another tab, with draft copying
+  and confirmed reload recovery.
 
 The frontend uses relative `/api` requests. In Docker, Nginx serves the React
 production build and forwards `/api/` to `api:8000`. In development, Vite proxies
@@ -434,16 +446,17 @@ untouched. Temporary environment values are restored after the run.
 The verification covers:
 
 1. Production image builds, startup health checks, migrations and Nginx syntax.
-2. 13 isolated API contract tests, 7 real PostgreSQL tests, and 1 real API/Redis
-   integration test inside the backend test image.
+2. API contract/security tests, real PostgreSQL tests, ASGI body-limit/timeout
+   tests, and real API/Redis integration inside the backend test image.
 3. HTTP requests through Nginx: dependency health, React HTML, missing-asset 404,
    create, update and delete, plus the Redis write count.
 4. Removal and recreation of all test containers **without removing volumes**.
    The PostgreSQL container ID must change while the saved note, original creation
    timestamp and Redis count stay intact. Re-running migrations must succeed.
-5. With `-BrowserTests`: 8 request-helper tests and 2 real browser tests covering
+5. With `-BrowserTests`: request-helper tests and real browser tests covering
    create/edit/search/reload/delete, PostgreSQL reads, Redis activity, dependency
-   health, JavaScript delivery and production cache headers.
+   health, JavaScript delivery, production security/cache headers and two-tab
+   edit conflict protection.
 
 On success or failure, cleanup removes **only that run's temporary containers,
 network and volumes**. Shared base images and build caches remain available.
@@ -473,6 +486,9 @@ References: [Compose startup and health waits](https://docs.docker.com/reference
 and [Playwright configuration](https://playwright.dev/docs/test-configuration).
 
 ## Error review and regression checks
+
+See [the security and logic review](docs/security-and-logic-review.md) for the
+subsequent request protections, runtime updates and concurrent-edit fixes.
 
 See [the error review](docs/error-review.md) for the cross-layer fixes and
 verification limits. Request-helper checks can now be run from `frontend/` with

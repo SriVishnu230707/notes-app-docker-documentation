@@ -14,7 +14,8 @@ function isNote(value) {
 function validResponse(path, method, data) {
   if (path === '/stats') return data && typeof data.redis_available === 'boolean'
     && (data.writes === null || (Number.isSafeInteger(data.writes) && data.writes >= 0));
-  if (path === '/notes' && method === 'GET') return Array.isArray(data) && data.every(isNote);
+  if (path === '/notes' && method === 'GET') return Array.isArray(data) && data.every(isNote)
+    && new Set(data.map(note => note.id)).size === data.length;
   if (path.startsWith('/notes')) return isNote(data);
   return data !== null;
 }
@@ -27,10 +28,10 @@ export async function request(path, options = {}) {
   else signal?.addEventListener('abort', cancel, { once: true });
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; controller.abort(); }, timeoutMs);
-  const method = options.method || 'GET';
+  const method = (options.method || 'GET').toUpperCase();
   try {
     const response = await fetch(`/api${path}`, {
-      ...fetchOptions, signal: controller.signal,
+      ...fetchOptions, method, signal: controller.signal,
       headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...options.headers },
     });
     if (response.status === 204 && method === 'DELETE') return null;

@@ -12,6 +12,7 @@ async function mockApi(page, options = {}) {
       return state.failLoad ? reply(503, { detail: 'Database is unavailable' }) : reply(200, state.notes);
     }
     if (state.failSave) return reply(503, { detail: 'Database is unavailable' });
+    if (state.conflict && req.method() !== 'POST') return reply(412, { detail: 'This note changed elsewhere. Reload notes before saving or deleting.' });
     if (req.method() === 'POST') {
       const now = new Date().toISOString();
       const note = { ...req.postDataJSON(), id: '11111111-1111-4111-8111-111111111111', created_at: now, updated_at: now };
@@ -166,4 +167,22 @@ test('a deleted remote note can be recovered without losing the draft', async ({
   await page.getByRole('button', { name: 'Save note' }).click();
   await expect(page.getByRole('status')).toHaveText('Saved.');
   expect(state.notes[0].content).toBe('Preserve these edits.');
+});
+
+test('a conflicting edit preserves the draft and blocks repeated overwrites', async ({ page }) => {
+  const note = { id: '22222222-2222-4222-8222-222222222222', title: 'Existing note', content: 'Original', created_at: '2026-10-07T00:00:00Z', updated_at: '2026-10-07T00:00:00Z' };
+  const state = await mockApi(page, { notes: [note] });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Notes' }).getByRole('button').click();
+  await page.getByLabel('Note content').fill('Keep my competing edit');
+  state.conflict = true;
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByRole('alert')).toContainText('changed elsewhere');
+  await expect(page.getByLabel('Note content')).toHaveValue('Keep my competing edit');
+  await expect(page.getByRole('button', { name: 'Save note' })).toBeDisabled();
+  await expect(page.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
+  await page.getByRole('button', { name: 'Keep draft as a new note' }).click();
+  await page.getByRole('button', { name: 'Save note' }).click();
+  await expect(page.getByRole('status')).toHaveText('Saved.');
+  expect(state.notes).toHaveLength(2);
 });
