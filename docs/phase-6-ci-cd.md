@@ -50,9 +50,11 @@ cd ..
 ```
 
 Choose a new `-OutputDirectory` when repeating export for the same revision.
-An existing destination is refused to avoid mixing releases. Export packages
-the current source files: use a clean committed checkout for a distributable
-release. CI always checks out the exact workflow commit. Linux and Windows
+An existing destination is refused to avoid mixing releases. Export requires
+the revision to match Git HEAD and rejects uncommitted application source or
+bundle configuration, including untracked files in backend/frontend. This
+prevents distributing changed code under an older revision's image tags.
+CI always checks out the exact workflow commit. Linux and Windows
 hosts can run these PowerShell scripts with PowerShell 7.
 
 Delivery ends at the tested downloadable bundle. Automatic deployment to a

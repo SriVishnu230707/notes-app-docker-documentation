@@ -507,6 +507,10 @@ Redis activity resets in recovered copies. See [the recovery runbook](docs/phase
 
 ## Error review and regression checks
 
+See [the Phase 6/7 debug review](docs/phase-6-7-debug-review.md) for release
+metadata validation, cleanup error reporting and revision guards. Run
+`./scripts/test-docker-tools.ps1` for the Docker-stub failure-path checks.
+
 See [the security and logic review](docs/security-and-logic-review.md) for the
 subsequent request protections, runtime updates and concurrent-edit fixes.
 

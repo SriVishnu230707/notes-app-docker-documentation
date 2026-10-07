@@ -5,10 +5,13 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 . "$PSScriptRoot/docker-tools.ps1"
 $root = Split-Path $PSScriptRoot -Parent
-if (-not $Revision) {
-    $Revision = & git -C $root rev-parse HEAD
-    if ($LASTEXITCODE -ne 0 -or $Revision -notmatch '^[a-f0-9]{40}$') { throw 'A full Git revision is required.' }
-}
+$checkoutRevision = & git -C $root rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $checkoutRevision -notmatch '^[a-f0-9]{40}$') { throw 'A committed Git checkout is required.' }
+if (-not $Revision) { $Revision = $checkoutRevision }
+if ($Revision -cne $checkoutRevision) { throw 'Release revision must match the checked-out Git HEAD.' }
+$changes = & git -C $root status --porcelain --untracked-files=normal -- backend frontend compose.yaml compose.release.yaml .env.example docs/release-bundle.md
+if ($LASTEXITCODE -ne 0) { throw 'Could not verify release source status.' }
+if ($changes) { throw 'Release source/configuration has uncommitted changes. Commit them before exporting.' }
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $root "artifacts/releases/$Revision" }
 $destination = [IO.Path]::GetFullPath($OutputDirectory)
 if (Test-Path -LiteralPath $destination) { throw 'Release destination already exists. Choose a new directory.' }

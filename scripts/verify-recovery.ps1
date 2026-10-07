@@ -20,12 +20,16 @@ $envFile = Join-Path $directory '.env'
 $settings = @{ WEB_PORT = "$WebPort"; API_PORT = "$ApiPort"; POSTGRES_DB = 'notes_drill'; POSTGRES_USER = 'notes_drill'; POSTGRES_PASSWORD = [guid]::NewGuid().ToString('N') }
 Write-NotesEnvironment $envFile $settings
 $savedEnvironment = @{}
+$started = $false
+$failure = $null
+$cleanupFailure = $null
 $composeArgs = Get-NotesComposeArguments $root $project $envFile
 try {
     foreach ($name in $settings.Keys) {
         $savedEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
         [Environment]::SetEnvironmentVariable($name, $settings[$name], 'Process')
     }
+    $started = $true
     Invoke-NotesDocker -Arguments ($composeArgs + @('up', '-d', '--build', '--wait', '--wait-timeout', '120'))
     $url = "http://127.0.0.1:$WebPort"
     foreach ($title in @('Recovery check', 'Unicode café — recovery')) {
@@ -48,10 +52,18 @@ try {
     catch { if ($_.Exception.Message -match 'SHA256 or size mismatch') { $refused = $true } else { throw } }
     if (-not $refused) { throw 'Tampered archive was not rejected.' }
     Write-Host 'PASS: tampered backup refused before creating recovery containers.'
-} finally {
-    try { Invoke-NotesDocker -Arguments ($composeArgs + @('down', '--volumes', '--remove-orphans', '--timeout', '10')) }
+} catch { $failure = $_ }
+finally {
+    try {
+        if ($started) { Invoke-NotesDocker -Arguments ($composeArgs + @('down', '--volumes', '--remove-orphans', '--timeout', '10')) }
+        if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile -Force }
+    } catch { $cleanupFailure = $_ }
     finally {
         Restore-NotesEnvironment $savedEnvironment
-        if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile -Force }
     }
 }
+if ($null -ne $failure) {
+    if ($null -ne $cleanupFailure) { Write-Warning "Drill cleanup also failed for $project. Environment file retained: $envFile" }
+    throw $failure
+}
+if ($null -ne $cleanupFailure) { throw $cleanupFailure }

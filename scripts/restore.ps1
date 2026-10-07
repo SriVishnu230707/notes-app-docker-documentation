@@ -34,6 +34,9 @@ $settings = @{
 $savedEnvironment = @{}
 $started = $false
 $success = $false
+$failure = $null
+$cleanupFailure = $null
+$result = $null
 $containerFile = '/tmp/notes-restore.dump'
 $composeArgs = Get-NotesComposeArguments $root $project $envFile
 
@@ -56,19 +59,27 @@ try {
     if ($health.status -ne 'ok') { throw 'Restored app failed its health check.' }
     $fingerprint = Get-NotesFingerprint $url
     $success = $true
-    Write-Host "PASS: archive restored into isolated project $project."
-    [pscustomobject]@{
+    $result = [pscustomobject]@{
         ProjectName = $project; WebUrl = $url; EnvFile = $envFile
         NoteCount = $fingerprint.Count; NotesSha256 = $fingerprint.Sha256
         RemovedAfterVerification = [bool]$VerifyOnly
     }
-} finally {
+} catch { $failure = $_ }
+finally {
     try {
         if ($started -and ($VerifyOnly -or -not $success)) {
             Invoke-NotesDocker -Arguments ($composeArgs + @('down', '--volumes', '--remove-orphans', '--timeout', '10'))
             if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile -Force }
         }
-    } finally {
+    } catch { $cleanupFailure = $_ }
+    finally {
         Restore-NotesEnvironment $savedEnvironment
     }
 }
+if ($null -ne $failure) {
+    if ($null -ne $cleanupFailure) { Write-Warning "Recovery cleanup also failed for $project. Environment file retained: $envFile" }
+    throw $failure
+}
+if ($null -ne $cleanupFailure) { throw $cleanupFailure }
+Write-Host "PASS: archive restored into isolated project $project."
+$result

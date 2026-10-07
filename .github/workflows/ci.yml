@@ -32,6 +32,9 @@ jobs:
           python3 -m venv /tmp/notes-audit
           /tmp/notes-audit/bin/pip install pip-audit==2.10.1
           /tmp/notes-audit/bin/pip-audit -r backend/requirements.txt -r backend/requirements-test.txt
+      - name: Docker script failure-path regression checks
+        shell: pwsh
+        run: ./scripts/test-docker-tools.ps1
       - name: Complete stack and browser verification
         shell: pwsh
         run: ./scripts/verify-stack.ps1 -BrowserTests

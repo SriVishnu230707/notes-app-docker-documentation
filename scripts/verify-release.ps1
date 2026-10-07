@@ -7,9 +7,9 @@ $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
 . "$PSScriptRoot/docker-tools.ps1"
 $bundle = (Resolve-Path -LiteralPath $BundlePath).Path
-$manifest = Get-Content -LiteralPath "$bundle/release.json" -Raw | ConvertFrom-Json
+$definition = Read-NotesReleaseDefinition $bundle
+$manifest = $definition.Manifest
 $archive = "$bundle/notes-images.tar.gz"
-if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $manifest.sha256) { throw 'Release archive checksum mismatch.' }
 Assert-NotesPorts $WebPort $ApiPort
 Invoke-NotesDocker -Arguments @('load', '-i', $archive)
 foreach ($image in $manifest.images.PSObject.Properties) {
@@ -22,18 +22,19 @@ if (Test-Path -LiteralPath $envFile) { throw 'Another verification environment a
 $settings = @{WEB_PORT="$WebPort"; API_PORT="$ApiPort"; POSTGRES_DB='notes_release'; POSTGRES_USER='notes_release'; POSTGRES_PASSWORD=[guid]::NewGuid().ToString('N')}
 Write-NotesEnvironment $envFile $settings
 $saved = @{}
+$started = $false
+$failure = $null
+$cleanupFailure = $null
 $argsCompose = @('compose','--project-directory',$bundle,'--env-file',$envFile,'--env-file',"$bundle/.env.images",'-p',$project,'-f',"$bundle/compose.yaml",'-f',"$bundle/compose.release.yaml")
 try {
     foreach ($name in $settings.Keys) { $saved[$name]=[Environment]::GetEnvironmentVariable($name,'Process'); [Environment]::SetEnvironmentVariable($name,$settings[$name],'Process') }
     # Prevent shell overrides from substituting images in this verification.
-    foreach ($line in (Get-Content -LiteralPath "$bundle/.env.images")) {
-        if ($line -notmatch '^(NOTES_(API|WEB|DB|REDIS)_IMAGE)=(.+)$') { throw 'Invalid release image environment.' }
-        $name = $Matches[1]; $value = $Matches[3]
-        if ($manifest.images.PSObject.Properties.Name -notcontains $value) { throw 'Image environment differs from release manifest.' }
+    foreach ($name in $definition.Environment.Keys) {
         $saved[$name]=[Environment]::GetEnvironmentVariable($name,'Process')
-        [Environment]::SetEnvironmentVariable($name,$value,'Process')
+        [Environment]::SetEnvironmentVariable($name,$definition.Environment[$name],'Process')
     }
     Invoke-NotesDocker -Arguments ($argsCompose + @('config','--quiet'))
+    $started = $true
     Invoke-NotesDocker -Arguments ($argsCompose + @('up','-d','--wait','--wait-timeout','120','--no-build','--pull','never'))
     $url = "http://127.0.0.1:$WebPort"
     $health = Invoke-RestMethod "$url/api/health" -TimeoutSec 20
@@ -43,8 +44,17 @@ try {
     if ($read.content -ne 'Runs without source folders') { throw 'Packaged CRUD failed.' }
     $html = Invoke-WebRequest "$url/" -TimeoutSec 20
     if ($html.Content -notmatch 'id="root"') { throw 'Packaged React page failed.' }
-    Write-Host 'PASS: release checksum, image IDs, migrations, React, API and PostgreSQL without builds or pulls.'
-} finally {
-    try { Invoke-NotesDocker -Arguments ($argsCompose + @('down','--volumes','--remove-orphans','--timeout','10')); Remove-Item -LiteralPath $envFile -Force }
+} catch { $failure = $_ }
+finally {
+    try {
+        if ($started) { Invoke-NotesDocker -Arguments ($argsCompose + @('down','--volumes','--remove-orphans','--timeout','10')) }
+        Remove-Item -LiteralPath $envFile -Force
+    } catch { $cleanupFailure = $_ }
     finally { Restore-NotesEnvironment $saved }
 }
+if ($null -ne $failure) {
+    if ($null -ne $cleanupFailure) { Write-Warning "Release cleanup also failed for $project. Environment file retained: $envFile" }
+    throw $failure
+}
+if ($null -ne $cleanupFailure) { throw $cleanupFailure }
+Write-Host 'PASS: release checksum, image IDs, migrations, React, API and PostgreSQL without builds or pulls.'
