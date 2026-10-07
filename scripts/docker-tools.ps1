@@ -42,3 +42,16 @@ function Write-NotesEnvironment {
     $lines = $Settings.Keys | Sort-Object | ForEach-Object { "$_=$($Settings[$_])" }
     [IO.File]::WriteAllLines($Path, [string[]]$lines, [Text.UTF8Encoding]::new($false))
 }
+
+function Restore-NotesEnvironment {
+    param([hashtable]$Saved)
+    foreach ($name in $Saved.Keys) {
+        # On current Windows .NET, setting null creates an empty variable.
+        # Remove previously absent entries so they cannot override Compose .env.
+        if ($null -eq $Saved[$name]) {
+            Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue
+        } else {
+            [Environment]::SetEnvironmentVariable($name, $Saved[$name], 'Process')
+        }
+    }
+}

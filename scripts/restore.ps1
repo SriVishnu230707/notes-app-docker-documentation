@@ -69,8 +69,6 @@ try {
             if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile -Force }
         }
     } finally {
-        foreach ($name in $savedEnvironment.Keys) {
-            [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
-        }
+        Restore-NotesEnvironment $savedEnvironment
     }
 }

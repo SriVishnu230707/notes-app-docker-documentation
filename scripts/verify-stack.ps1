@@ -9,6 +9,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+. "$PSScriptRoot/docker-tools.ps1"
 $root = Split-Path $PSScriptRoot -Parent
 $project = 'notes-check-' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 $baseArgs = @('compose', '--project-directory', $root, '--env-file', "$root/.env.example", '-p', $project, '-f', "$root/compose.yaml")
@@ -124,9 +125,7 @@ try {
         $cleanupFailed = $LASTEXITCODE -ne 0
         if ($cleanupFailed) { Write-Warning "Cleanup failed for $project. Retry: docker compose --project-directory '$root' --env-file '$root/.env.example' -f '$root/compose.yaml' -p $project down --volumes" }
     }
-    foreach ($name in $savedEnvironment.Keys) {
-        [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process')
-    }
+    Restore-NotesEnvironment $savedEnvironment
 }
 if ($null -ne $failure) { throw $failure }
 if ($cleanupFailed) { throw "Verification passed, but cleanup failed for $project." }
