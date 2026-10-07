@@ -35,6 +35,12 @@ jobs:
       - name: Docker script failure-path regression checks
         shell: pwsh
         run: ./scripts/test-docker-tools.ps1
+      - name: Phase 8 safety and report regression checks
+        shell: pwsh
+        run: |
+          ./scripts/test-phase8.ps1
+          python3 scripts/test_load_test.py
+          if ($LASTEXITCODE -ne 0) { throw 'Load-generator safety tests failed.' }
       - name: Complete stack and browser verification
         shell: pwsh
         run: ./scripts/verify-stack.ps1 -BrowserTests
@@ -44,6 +50,9 @@ jobs:
       - name: Bounded concurrent load and Engine resource limits
         shell: pwsh
         run: ./scripts/verify-load.ps1
+      - name: Development Vite/proxy/resource-profile verification
+        shell: pwsh
+        run: ./scripts/verify-dev.ps1
       - name: Load verification report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

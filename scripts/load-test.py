@@ -3,6 +3,8 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
 import math
+import os
+import re
 import statistics
 import threading
 import time
@@ -69,6 +71,9 @@ def run(concurrency, iterations, max_p95_ms):
 
     started = time.perf_counter()
     try:
+        if os.environ.get("PGDATABASE") != "notes_load" or not re.fullmatch(
+                r"notes-load-[a-f0-9]{12}", os.environ.get("NOTES_LOAD_PROJECT", "")):
+            raise AssertionError("Load generator requires a marked disposable notes_load project")
         if call("GET", "/api/notes", 200):
             raise AssertionError("Load test requires an empty disposable database")
         before = call("GET", "/api/stats", 200)

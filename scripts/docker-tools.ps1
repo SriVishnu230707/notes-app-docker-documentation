@@ -88,3 +88,17 @@ function Read-NotesReleaseDefinition {
     if ((Get-FileHash -LiteralPath "$Bundle/notes-images.tar.gz" -Algorithm SHA256).Hash.ToLowerInvariant() -cne $manifest.sha256) { throw 'Release archive checksum mismatch.' }
     return [pscustomobject]@{ Manifest=$manifest; Environment=$environment }
 }
+
+function Read-NotesLoadReport {
+    param([string]$Json, [int]$Concurrency, [int]$Iterations, [int]$MaxP95Ms)
+    $report=$Json | ConvertFrom-Json
+    if($null -eq $report -or $report.passed -isnot [bool] -or $report.failures -isnot [array]){throw 'Invalid load report result/failure fields.'}
+    if($report.requests -isnot [int] -and $report.requests -isnot [long]){throw 'Invalid load report request count.'}
+    if($report.p95_ms -isnot [int] -and $report.p95_ms -isnot [long] -and $report.p95_ms -isnot [double]){throw 'Invalid load report latency.'}
+    if([double]::IsNaN($report.p95_ms) -or [double]::IsInfinity($report.p95_ms) -or $report.p95_ms -lt 0){throw 'Invalid load report latency.'}
+    $expected=7*$Concurrency*$Iterations+5
+    if($report.concurrency -ne $Concurrency -or $report.iterations_per_worker -ne $Iterations -or $report.max_p95_ms -ne $MaxP95Ms -or $report.requests -lt 0 -or $report.requests -gt $expected){throw 'Load report does not match the requested workload.'}
+    if($report.passed -and ($report.requests -ne $expected -or $report.failures.Count -ne 0 -or $report.p95_ms -gt $MaxP95Ms)){throw 'Load report claims success for an incomplete or failed workload.'}
+    if(-not $report.passed -and $report.failures.Count -eq 0){throw 'Failed load report contains no diagnostic.'}
+    return $report
+}

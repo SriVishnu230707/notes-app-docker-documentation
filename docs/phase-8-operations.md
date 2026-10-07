@@ -27,6 +27,11 @@ the stack, image builds and other containers. A migration runs briefly; the
 four long-running services have a combined configured memory ceiling of 960
 MiB. Build processes and load-generation overhead are additional.
 
+The development override gives Vite/Node 1 CPU and 512 MiB, since transforming
+source needs a larger budget than serving compiled files with Nginx. Verify
+development startup and proxy writes with `./scripts/verify-dev.ps1`; it uses
+a disposable project and does not modify your normal notes.
+
 Redis has a 64 MiB dataset limit with `noeviction`: if full, writes to the
 activity counter may fail rather than silently evicting it. The API continues
 to commit PostgreSQL notes and logs Redis write errors. The stats endpoint
@@ -55,12 +60,14 @@ docker compose logs --tail 100 --timestamps db redis migrate
 docker compose stats --no-stream
 ```
 
-Open http://localhost:8080. For a custom port, pass it to the status script:
-`./scripts/status.ps1 -WebPort 9080`. For an isolated recovered project also
-pass `-ProjectName` and `-EnvFile`. Status is read-only, checks every required
+Open http://localhost:8080. Status automatically reads the selected project's
+published Nginx or Vite port from Docker. An explicit `-WebPort 9080` must match
+that mapping; it cannot probe another project's healthy endpoint. For an
+isolated recovered project pass `-ProjectName` and `-EnvFile`. Status is read-only, checks every required
 container and the completed migration, then reaches dependencies through the
 web endpoint. It raises an error when a check fails, so it can be used in a
 manual script. It does not schedule monitoring or send notifications.
+Optional resource-stat failures produce a warning without masking health.
 
 ## Bounded load verification
 
@@ -82,6 +89,12 @@ through Nginx to FastAPI/PostgreSQL/Redis. It never points at the regular app.
 The generator uses Python already installed in the API container, sets an
 explicit localhost Host header for the app's local-host policy and has a
 15-second request timeout. No host Python or load-testing package is needed.
+It also requires the disposable-project marker and `notes_load` database;
+running the Python driver directly in the normal app refuses HTTP requests.
+Empty/malformed generator output is retained as a failed diagnostic report
+with its exit code. Success requires a valid boolean result, matching workload
+and request count, finite latency and no reported failures. Optional resource
+stats cannot hide a failed result.
 
 Pass conditions: all expected HTTP statuses/data checks succeed and aggregate
 p95 request duration stays below the configurable threshold (2,000 ms by

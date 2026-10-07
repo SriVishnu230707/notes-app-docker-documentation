@@ -5,6 +5,9 @@ services:
     volumes:
       - ./backend/app:/app/app:ro
   web:
+    # Vite/Node transforms source in memory; the production Nginx limit is too small.
+    cpus: 1.0
+    mem_limit: 512m
     build:
       context: ./frontend
       target: dev

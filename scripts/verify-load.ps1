@@ -34,13 +34,20 @@ try {
         if($service -ne 'migrate'){$runningIds+=$id}
         if($config.Memory -le 0 -or $config.NanoCpus -le 0 -or $config.PidsLimit -le 0 -or $config.LogConfig.Type -ne 'json-file' -or $config.LogConfig.Config.'max-size' -ne '10m' -or $config.LogConfig.Config.'max-file' -ne '3'){throw "Resource/log limits missing for $service"}
     }
-    $output=Get-Content -LiteralPath "$PSScriptRoot/load-test.py" -Raw | & docker @composeArgs exec -T api python - --concurrency $Concurrency --iterations $Iterations --max-p95-ms $MaxP95Ms
+    $output=Get-Content -LiteralPath "$PSScriptRoot/load-test.py" -Raw | & docker @composeArgs exec -T -e "NOTES_LOAD_PROJECT=$project" api python - --concurrency $Concurrency --iterations $Iterations --max-p95-ms $MaxP95Ms
     $exitCode=$LASTEXITCODE
-    $report=($output -join "`n") | ConvertFrom-Json
+    $validationFailure=$null
+    try {$report=Read-NotesLoadReport ($output -join "`n") $Concurrency $Iterations $MaxP95Ms}
+    catch {
+        $validationFailure=$_
+        $report=[pscustomobject]@{passed=$false;concurrency=$Concurrency;iterations_per_worker=$Iterations;requests=0;exit_code=$exitCode;failures=@('Load generator returned no valid report.');phase='load-generator'}
+    }
     $report | Add-Member -NotePropertyName project -NotePropertyValue $project
     $report | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath "$directory/report.json" -Encoding utf8
-    Invoke-NotesDocker -Arguments (@('stats','--no-stream','--format','table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}') + $runningIds)
+    if($null -ne $validationFailure){throw "Invalid load-generator report (exit code $exitCode). See $directory/report.json"}
     if($exitCode -ne 0 -or -not $report.passed){throw "Load verification failed. See $directory/report.json"}
+    try {Invoke-NotesDocker -Arguments (@('stats','--no-stream','--format','table {{.Name}}\t{{.CPUPerc}}\t{{.MemUsage}}\t{{.PIDs}}') + $runningIds)}
+    catch {Write-Warning 'Resource stats unavailable; the validated load result is retained.'}
 } catch { $failure=$_ }
 finally {
     try {

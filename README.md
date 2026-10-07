@@ -520,6 +520,8 @@ See [the final operations runbook](docs/phase-8-operations.md) for monitoring,
 troubleshooting, upgrades, rollback and the complete phase lineup.
 See [Phase 8 verification results](docs/phase-8-verification.md) for the local
 load measurements and data-preservation checks.
+See [the Phase 8 debug review](docs/phase-8-debug-review.md) for project-specific
+status, load-generator guards, report validation and development-profile fixes.
 
 ## Error review and regression checks
 
