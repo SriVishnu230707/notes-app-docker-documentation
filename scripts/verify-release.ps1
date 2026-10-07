@@ -45,6 +45,6 @@ try {
     if ($html.Content -notmatch 'id="root"') { throw 'Packaged React page failed.' }
     Write-Host 'PASS: release checksum, image IDs, migrations, React, API and PostgreSQL without builds or pulls.'
 } finally {
-    try { Invoke-NotesDocker -Arguments ($argsCompose + @('down','--volumes','--remove-orphans','--timeout','10')); Remove-Item -LiteralPath $envFile }
+    try { Invoke-NotesDocker -Arguments ($argsCompose + @('down','--volumes','--remove-orphans','--timeout','10')); Remove-Item -LiteralPath $envFile -Force }
     finally { foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name,$saved[$name],'Process') } }
 }

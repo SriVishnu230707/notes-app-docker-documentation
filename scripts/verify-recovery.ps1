@@ -52,6 +52,6 @@ try {
     try { Invoke-NotesDocker -Arguments ($composeArgs + @('down', '--volumes', '--remove-orphans', '--timeout', '10')) }
     finally {
         foreach ($name in $savedEnvironment.Keys) { [Environment]::SetEnvironmentVariable($name, $savedEnvironment[$name], 'Process') }
-        if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile }
+        if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile -Force }
     }
 }

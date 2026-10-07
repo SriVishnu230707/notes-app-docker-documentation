@@ -66,7 +66,7 @@ try {
     try {
         if ($started -and ($VerifyOnly -or -not $success)) {
             Invoke-NotesDocker -Arguments ($composeArgs + @('down', '--volumes', '--remove-orphans', '--timeout', '10'))
-            if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile }
+            if (Test-Path -LiteralPath $envFile) { Remove-Item -LiteralPath $envFile -Force }
         }
     } finally {
         foreach ($name in $savedEnvironment.Keys) {
