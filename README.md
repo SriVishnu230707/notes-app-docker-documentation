@@ -485,6 +485,26 @@ References: [Compose startup and health waits](https://docs.docker.com/reference
 [Compose teardown and volume behavior](https://docs.docker.com/reference/cli/docker/compose/down/),
 and [Playwright configuration](https://playwright.dev/docs/test-configuration).
 
+## Phase 6: CI/CD and versioned Docker releases
+
+Pushes, pull requests and manual runs now verify dependencies, frontend/backend
+tests, the complete Docker stack and recovery. Successful main runs deliver a
+versioned Docker image bundle, tested without source folders or registry pulls.
+See [Phase 6 setup and commands](docs/phase-6-ci-cd.md) and
+[running a release bundle](docs/release-bundle.md).
+
+## Phase 7: backup and recovery
+
+```powershell
+$backup = ./scripts/backup.ps1
+./scripts/restore.ps1 -BackupPath $backup.ArchivePath -VerifyOnly
+./scripts/verify-recovery.ps1
+```
+
+Backups include PostgreSQL notes and a checksum manifest. Restore uses a
+separate project; omit `-VerifyOnly` to inspect the recovered app on port 19080.
+Redis activity resets in recovered copies. See [the recovery runbook](docs/phase-7-backup-recovery.md).
+
 ## Error review and regression checks
 
 See [the security and logic review](docs/security-and-logic-review.md) for the

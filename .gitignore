@@ -10,4 +10,5 @@ __pycache__/
 playwright-report/
 test-results/
 backups/
+artifacts/
 test-results-security.log

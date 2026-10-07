@@ -1,0 +1,15 @@
+# Release images supplied by .env.images; no source folders required.
+services:
+  db:
+    image: ${NOTES_DB_IMAGE:?Supply .env.images}
+  redis:
+    image: ${NOTES_REDIS_IMAGE:?Supply .env.images}
+  migrate:
+    build: !reset null
+    image: ${NOTES_API_IMAGE:?Supply .env.images}
+  api:
+    build: !reset null
+    image: ${NOTES_API_IMAGE:?Supply .env.images}
+  web:
+    build: !reset null
+    image: ${NOTES_WEB_IMAGE:?Supply .env.images}

@@ -1,0 +1,74 @@
+name: Verify and package Notes
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: notes-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.23.3'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Frontend contracts and dependency audit
+        working-directory: frontend
+        run: |
+          npm ci
+          npm audit --audit-level=high
+          npx playwright install --with-deps chromium
+          npm test
+      - name: Python dependency audit
+        run: |
+          python3 -m venv /tmp/notes-audit
+          /tmp/notes-audit/bin/pip install pip-audit==2.10.1
+          /tmp/notes-audit/bin/pip-audit -r backend/requirements.txt -r backend/requirements-test.txt
+      - name: Complete stack and browser verification
+        shell: pwsh
+        run: ./scripts/verify-stack.ps1 -BrowserTests
+      - name: Backup recovery and corruption verification
+        shell: pwsh
+        run: ./scripts/verify-recovery.ps1
+      - name: Failed browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: browser-diagnostics
+          path: frontend/test-results/
+          retention-days: 7
+          if-no-files-found: ignore
+  release:
+    needs: verify
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Package versioned images
+        shell: pwsh
+        run: ./scripts/export-release.ps1 -Revision '${{ github.sha }}'
+      - name: Verify packaged startup
+        shell: pwsh
+        run: ./scripts/verify-release.ps1 -BundlePath 'artifacts/releases/${{ github.sha }}'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: notes-release-${{ github.sha }}
+          path: |
+            artifacts/releases/${{ github.sha }}/notes-images.tar.gz
+            artifacts/releases/${{ github.sha }}/release.json
+            artifacts/releases/${{ github.sha }}/compose*.yaml
+            artifacts/releases/${{ github.sha }}/.env.example
+            artifacts/releases/${{ github.sha }}/.env.images
+            artifacts/releases/${{ github.sha }}/README.md
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
