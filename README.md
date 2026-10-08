@@ -1,549 +1,354 @@
-# Full-stack Notes App
+# Notebook — Full-stack Notes App
 
-React + FastAPI + PostgreSQL + Redis, orchestrated with Docker Compose.
+[![Verify and package Notes](https://github.com/SriVishnu230707/notes-app-docker-documentation/actions/workflows/ci.yml/badge.svg)](https://github.com/SriVishnu230707/notes-app-docker-documentation/actions/workflows/ci.yml)
 
-## Step 1: configuration and infrastructure
+A personal notes app built with **React, FastAPI, PostgreSQL and Redis**, running together with **Docker Compose**. Create, search and edit notes in a responsive notebook interface, with persistent storage and protection against conflicting edits.
 
-Step 1 defines all four services, environment configuration, networking,
-persistent volumes, and dependency health checks. Step 2 adds the database layer,
-backend image and versioned migrations. Step 3 adds the FastAPI routes and Redis
-activity tracking. Step 4 adds the React frontend and its dependency lockfile.
-Step 5 adds automated verification of the real Docker stack, production browser
-flow, and volume persistence across container replacement.
+The repository also demonstrates the complete Docker workflow: images, networking, environment configuration, migrations, automated tests, release packaging, backup recovery and resource limits. It is designed for **local, single-user use**; public hosting requires authentication, HTTPS and deployment-specific configuration.
+
+[Quick start](#quick-start) · [Architecture](#architecture) · [Development](#development) · [Docker commands](#docker-commands) · [Testing](#testing) · [Backup and recovery](#backup-and-recovery) · [Guides](#guides)
+
+## Features
+
+- Create, edit, delete and search notes by title or content.
+- Preserve drafts after failed saves and confirm before discarding unsaved edits.
+- Detect stale saves/deletes across browser tabs with note versions and `If-Match`.
+- Keep notes in PostgreSQL volumes and track successful mutations in Redis.
+- Apply versioned database migrations before starting the API.
+- Run production and development setups with the same service network.
+- Verify application flows, persistence, recovery and concurrent requests in GitHub Actions.
+- Export a tested Docker image bundle that starts without source code or registry pulls.
+
+## Quick start
 
 ### Requirements
 
-- Docker Desktop running with **Linux containers** on Windows.
-- Docker Compose v2.24.4 or newer if using `compose.dev.yaml` (`!override`).
-- PowerShell for the commands below.
+- Git to clone the repository.
+- Docker Desktop with **Linux containers** on Windows, or Docker Engine on Linux.
+- Docker Compose **2.24.4+**.
+- **PowerShell 7+** for the commands and helper scripts below (`pwsh`).
 
-Node, Python, PostgreSQL and Redis do not need local installation to run their
-containers. Docker Desktop supplies the engine and Compose command.
+You do not need host installations of Node.js, Python, PostgreSQL or Redis to run the containerized app. Node.js 22 and a browser are needed only for host-based frontend/browser tests.
 
-### Configure the project
-
-Run from the project directory:
+### 1. Clone and configure
 
 ```powershell
-# Run once, only if .env does not already exist.
-Copy-Item .env.example .env
+git clone https://github.com/SriVishnu230707/notes-app-docker-documentation.git
+Set-Location notes-app-docker-documentation
 
-# Validate without building images or starting containers.
-docker compose config --quiet
-docker compose -f compose.yaml -f compose.dev.yaml config --quiet
+# Keep existing configuration when returning to the project.
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-`.env.example` is the shareable template. `.env` is local and ignored by Git.
-Existing `.env` values take precedence over the template; shell environment
-variables can override `.env` values during Compose interpolation.
+If you already have the project, start in its repository root and skip cloning. Edit `.env` to choose your database password before the first startup. The example password is for local learning.
 
-| Variable | Purpose | Template value |
-| --- | --- | --- |
-| `POSTGRES_DB` | Database to create | `notes` |
-| `POSTGRES_USER` | Local database user | `notes` |
-| `POSTGRES_PASSWORD` | Local database password | Local sample password |
-| `WEB_PORT` | Browser-facing host port | `8080` |
-| `API_PORT` | API/docs host port | `8000` |
+### 2. Build and start
 
-Compose rejects missing or empty database settings. The template password is
-for local learning; set your own value in `.env`. Changing these initialization
-values does not change credentials in an already initialized PostgreSQL volume.
-
-### Start the Step 1 infrastructure
+Start Docker, then run:
 
 ```powershell
 docker version
-docker compose up -d --wait db redis
-docker compose ps
-docker compose exec db sh -c 'pg_isready -h 127.0.0.1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
-docker compose exec redis redis-cli ping
+docker compose config --quiet
+docker compose up -d --build --wait --wait-timeout 120
+./scripts/status.ps1
 ```
 
-Expected results: `db` and `redis` report healthy, PostgreSQL reports accepting
-connections, and Redis returns `PONG`. If Docker reports a missing engine pipe,
-open Docker Desktop, wait until the Linux engine is running, and retry.
+The first run downloads base images, installs dependencies and applies migrations. A successful startup leaves **four healthy services** and a migration container that has exited with code `0`.
 
-### Service lineup
+### 3. Open the app
 
-| Service | Container port | Host access | Role |
-| --- | --- | --- | --- |
-| `web` | `80` | `127.0.0.1:8080` by default | Nginx serves React and forwards `/api/` |
-| `api` | `8000` | `127.0.0.1:8000` by default | FastAPI application and `/docs` |
-| `db` | `5432` | Internal network only | PostgreSQL note storage |
-| `redis` | `6379` | Internal network only | Redis write activity |
+| URL | What you get |
+| --- | --- |
+| [localhost:8080](http://localhost:8080/) | Notes interface |
+| [localhost:8000/docs](http://localhost:8000/docs) | Interactive FastAPI documentation |
+| [localhost:8080/api/health](http://localhost:8080/api/health) | PostgreSQL/Redis health through the web proxy |
 
-All services join the `notes` bridge network managed by Compose. Within it,
-service names resolve as hostnames: the API connects to `db:5432` and
-`redis:6379`. Nginx connects to `api:8000`. The browser uses `localhost` and
-relative `/api` requests. `localhost` inside a container refers to that container.
+Use your configured ports if you changed `.env`.
 
-```text
-Browser -> localhost:8080 -> web -> api:8000 -> db:5432
-                                           -> redis:6379
-```
-
-Startup order is `db -> migrate`, then `migrate + db + redis -> api -> web`.
-`migrate` is a one-shot job in addition to the four running services. It must exit
-successfully before the API starts. Each running dependency must pass its health
-check before the next dependent service starts. PostgreSQL is checked over TCP
-so its temporary initialization server does not report ready before the database
-can accept connections from the API. Health checks are repeated, but
-Compose does not automatically restart an unhealthy container or cascade later
-dependency failures. `restart: unless-stopped` handles container process exits.
-
-### Persistence
-
-- `postgres_data` mounts at `/var/lib/postgresql/data`.
-- `redis_data` mounts at `/data`; Redis append-only persistence is enabled.
-
-Named volumes survive container replacement and ordinary shutdown. They are
-local persistent storage; backups require a separate workflow.
+To stop the app while keeping your notes:
 
 ```powershell
-docker compose logs --tail 100 db redis
-docker compose stop db redis
 docker compose down
 ```
 
-`down` removes containers and the Compose network while preserving volumes.
-`docker compose down -v` deletes the volumes and their data; use it only for an
-intentional reset.
+Start it again with `docker compose up -d --wait`. The existing named volumes are reused when you keep the same Compose project name/directory. `down --volumes` deletes database and Redis data; it is an intentional reset, not routine shutdown.
 
-### Run the complete application
+## Architecture
 
-Build and start all application services:
-
-```powershell
-docker compose up --build -d --wait
+```mermaid
+flowchart LR
+    Browser[Browser] -->|localhost:8080| Web[React served by Nginx]
+    Web -->|/api requests| API[FastAPI :8000]
+    API -->|notes and transactions| DB[(PostgreSQL :5432)]
+    API -->|write activity| Redis[(Redis :6379)]
+    Migrate[Alembic migration job] --> DB
+    DB --- PGVolume[postgres_data volume]
+    Redis --- RedisVolume[redis_data volume]
 ```
 
-App: <http://localhost:8080>. API documentation: <http://localhost:8000/docs>.
-Use your configured ports if you changed them.
-
-The development override swaps Nginx for Vite on container port `5173`, binds
-frontend source, and enables Uvicorn reload for backend source:
-
-```powershell
-docker compose -f compose.yaml -f compose.dev.yaml up --build
-```
-
-### Docker concepts
-
-1. A **Dockerfile** describes how to build an application image.
-2. An **image** packages the runtime, dependencies and application files.
-3. A **container** runs an image as an isolated process.
-4. **Compose** describes the services, configuration, connections and startup.
-5. A **network** lets containers communicate through service names.
-6. A **volume** retains data independently of a container's lifecycle.
-
-Compose builds the database migration/API image from `backend/` and the web
-image from `frontend/`. PostgreSQL and Redis
-use official images with explicit version tags. The application build contexts
-include `.dockerignore` files excluding local dependencies and environment
-files. Official runtime images now use version tags plus verified manifest
-digests; future runtime patches require explicit digest updates. The frontend
-dependency lockfile is committed. Backend requirements pin direct dependencies;
-transitive dependency resolution is not fully locked.
-
-References: [Compose networking](https://docs.docker.com/compose/how-tos/networking/),
-[dependency startup](https://docs.docker.com/compose/how-tos/startup-order/), and
-[Compose application model](https://docs.docker.com/compose/intro/compose-application-model/).
-
-## Step 2: PostgreSQL schema and migrations
-
-The initial migration `0001_create_notes` creates:
-
-| Column | PostgreSQL type | Rules |
+| Service | Purpose | Access from your laptop |
 | --- | --- | --- |
-| `id` | `UUID` | Primary key; generated by PostgreSQL |
-| `title` | `VARCHAR(200)` | Required; must contain a non-whitespace character |
-| `content` | `TEXT` | Required; defaults to empty; maximum 50,000 characters |
-| `created_at` | `TIMESTAMPTZ` | Defaults to the insertion transaction time |
-| `updated_at` | `TIMESTAMPTZ` | Defaults on insert; trigger refreshes on update |
+| `web` | Nginx serves the React build and proxies `/api/` | `127.0.0.1:8080` |
+| `api` | Validates requests and reads/writes notes | `127.0.0.1:8000` |
+| `db` | Stores notes, timestamps and migration state | Internal network only |
+| `redis` | Stores a best-effort write counter with append-only persistence | Internal network only |
+| `migrate` | Applies pending Alembic migrations, then exits | One-shot internal job |
 
-An index on `(updated_at DESC, id DESC)` supports the notes listing order.
-Database constraints protect notes even when written outside the API. Queries in
-`backend/app/repository.py` pass values separately using psycopg parameters.
-Connections commit on a successful context exit and roll back on exceptions.
+Startup proceeds **database → migrations → API → web**, with the API also waiting for healthy Redis. All services share a Compose network and resolve one another by service name. Inside a container, `localhost` means that container; the API connects to `db` and `redis`, rather than your laptop's localhost.
 
-### Apply and inspect the schema
+### What Docker does here
 
-```powershell
-docker compose up -d --wait db
-docker compose build migrate
-docker compose run --rm migrate
-# Running again is safe: Alembic applies only pending revisions.
-docker compose run --rm migrate
-docker compose run --rm migrate alembic current
-docker compose exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "\d notes"'
-```
+| Docker part | How the project uses it |
+| --- | --- |
+| Dockerfiles | Package the backend runtime and frontend build/server |
+| Images | Supply application dependencies and the PostgreSQL/Redis runtimes |
+| Containers | Run each service as a separate process with resource ceilings |
+| Compose YAML | Connect services, pass configuration and coordinate startup |
+| Network | Route private service-to-service traffic |
+| Named volumes | Preserve notes and Redis activity across container replacement |
+| Health checks | Confirm dependencies are ready before later services start |
 
-The migration reads the same PG environment as the API. Credentials are not
-stored in `alembic.ini`. Alembic records the applied revision in `alembic_version`.
-PostgreSQL applies the migration transactionally, and an advisory lock serializes
-concurrent migration runners. Completed migrations should remain unchanged;
-add a new revision for each future schema change.
+Application images are built from [backend/Dockerfile](backend/Dockerfile) and [frontend/Dockerfile](frontend/Dockerfile). Base images use explicit versions and manifest digests. Frontend dependencies use `npm ci` and a committed lockfile; backend direct dependencies are pinned, with transitive resolution not fully locked.
 
-Migration `0002_monotonic_note_versions` subsequently makes `updated_at` strictly
-advance on each update for optimistic concurrency checks. It replaces the trigger
-function without dropping notes or editing the initial migration.
+## Configuration
 
-### Run database integration checks
+Compose reads `.env` and explicitly passes database settings to containers. `.env` is ignored by Git; [.env.example](.env.example) is the shareable template.
 
-```powershell
-docker compose run --rm migrate python -m unittest discover -s tests -p test_database.py -v
-```
-
-Checks cover the migration version, CRUD, UUID/timestamp defaults, timestamp
-updates, missing notes, SQL-like text, invalid values, maximum lengths, and
-transaction rollback. Each test rolls back its own writes without deleting
-existing notes. The checks require the migration to have been applied first.
-
-Implementation validation passed Python syntax checks, dependency compatibility,
-offline upgrade/downgrade SQL generation, and both Compose configurations. Live
-migration execution and PostgreSQL integration tests also passed during Step 5.
-
-The initial migration expects a fresh schema. If you previously created a notes
-table manually or with the local prototype, migration will fail rather than
-silently adopt an unknown schema. Back up that data and plan a migration before
-proceeding. Do not delete a volume containing notes you need to keep.
-
-Normal startup only upgrades the schema. Downgrading the initial revision drops
-the notes table and is an explicit destructive operation. Volume persistence
-remains as documented in Step 1.
-
-References: [Alembic migration tutorial](https://alembic.sqlalchemy.org/en/latest/tutorial.html),
-[PostgreSQL constraints](https://www.postgresql.org/docs/17/ddl-constraints.html),
-and [PostgreSQL triggers](https://www.postgresql.org/docs/17/plpgsql-trigger.html).
-
-## Step 3: FastAPI backend
-
-The API uses the Step 2 repository and schema. It does not create tables on
-startup. Compose runs migrations before starting Uvicorn. The backend runs as a
-non-root user, and each database operation uses its own transaction/connection.
-
-### Start the API without the frontend
-
-```powershell
-docker compose up --build -d --wait api
-docker compose ps -a
-docker compose logs --tail 100 migrate api
-Invoke-RestMethod http://localhost:8000/api/health
-```
-
-This starts the database, Redis, migration job and API. A successful migration
-job exits with code 0; it is not a continuously running service. Open
-<http://localhost:8000/docs> for the interactive API explorer or
-<http://localhost:8000/openapi.json> for its schema. Use your configured API port
-if it differs from 8000. Full-stack startup is available with Step 4.
-
-### Endpoints
-
-| Method | Path | Result |
+| Variable | Default | Purpose |
 | --- | --- | --- |
-| GET | `/api/notes` | `200`: notes, newest update first |
-| GET | `/api/notes/{id}` | `200`: one note; `404` if missing |
-| POST | `/api/notes` | `201`: created note and `Location` header |
-| PUT | `/api/notes/{id}` | `200`: replaced title/content; `404` if missing |
-| DELETE | `/api/notes/{id}` | `204`: empty body; `404` if missing |
-| GET | `/api/stats` | `200`: Redis write count and availability |
-| GET | `/api/health` | `200` when notes schema and Redis are reachable; otherwise `503` |
+| `POSTGRES_DB` | `notes` | PostgreSQL database name |
+| `POSTGRES_USER` | `notes` | PostgreSQL user |
+| `POSTGRES_PASSWORD` | Local example value | Database password |
+| `WEB_PORT` | `8080` | Host port for the notes interface |
+| `API_PORT` | `8000` | Host port for direct API access |
 
-POST and PUT require a string `title` of 1–200 characters, containing a
-non-whitespace character. Leading/trailing title whitespace is trimmed.
-`content` is a string up to 50,000 characters; omitting it supplies an empty
-string. PUT replaces the complete title/content pair, so omitted content clears
-the previous body. Nulls and unknown fields are rejected. Invalid input, malformed
-JSON and invalid UUIDs receive FastAPI's structured `422` validation response.
+Shell variables override `.env` values during Compose interpolation. Host-port changes do not change internal service ports. Changing PostgreSQL initialization values does **not** change credentials in an existing database volume.
 
-Responses contain `id`, `title`, `content`, `created_at` and `updated_at`. UUIDs
-are strings in JSON, and timestamps include their timezone. GET-one, POST and
-PUT return an `ETag` derived from `updated_at`. The browser sends this value in
-`If-Match` on PUT/DELETE; stale versions receive `412` without changing data.
-Command-line writes without `If-Match` remain supported but do not prevent
-concurrent overwrites. Database connection
-errors return `503`; other database failures return a generic `500` without
-SQL or credentials in the response. The app is scoped to local single-user use.
+The production profile sets CPU, memory and process ceilings and rotates container logs. Development gives Vite a larger memory budget. See the [operations runbook](docs/phase-8-operations.md#resource-profile) for the complete profile.
 
-### Try the CRUD flow in PowerShell
+## Development
+
+### Frontend and backend reload inside Docker
+
+Switch from the production setup while preserving volumes:
 
 ```powershell
-$apiBase = 'http://localhost:8000'
-$body = @{ title = 'My first note'; content = 'Built with FastAPI and Docker.' } | ConvertTo-Json
-$note = Invoke-RestMethod "$apiBase/api/notes" -Method Post -ContentType 'application/json' -Body $body
-Invoke-RestMethod "$apiBase/api/notes/$($note.id)"
-Invoke-RestMethod "$apiBase/api/notes"
-
-$editedBody = @{ title = 'Updated note'; content = 'Changes are saved in PostgreSQL.' } | ConvertTo-Json
-Invoke-RestMethod "$apiBase/api/notes/$($note.id)" -Method Put -ContentType 'application/json' -Body $editedBody
-Invoke-RestMethod "$apiBase/api/notes/$($note.id)" -Method Delete
-Invoke-RestMethod "$apiBase/api/stats"
+docker compose down
+docker compose -f compose.yaml -f compose.dev.yaml up -d --build --wait --wait-timeout 120
+./scripts/status.ps1
 ```
 
-### Redis activity behavior
+Open the same web URL. Vite listens on internal port `5173`, proxies API requests and reloads frontend source. Uvicorn reloads backend source. Source directories are bind-mounted read-only; dependency changes require rebuilding images.
 
-Successful create, update and delete operations increment `notes:write_count`
-after the database commit. Reads, validation failures and missing-note operations
-do not increment it. If Redis fails, a committed note operation still returns
-success; `/api/stats` returns `writes: null` and `redis_available: false`.
-The count is best-effort activity telemetry: database commits and Redis writes
-are separate operations, so an outage can cause missed counts. Redis append-only
-persistence stores the count across normal restarts.
-
-### API checks
-
-The test image adds HTTPX2; it is excluded from the production image. Run the
-HTTP contract and failure tests without starting database dependencies:
+To return to production:
 
 ```powershell
-docker compose -f compose.yaml -f compose.test.yaml run --rm --build --no-deps api python -m unittest discover -s tests -p test_api.py -v
+docker compose -f compose.yaml -f compose.dev.yaml down
+docker compose up -d --build --wait --wait-timeout 120
 ```
 
-For a local Python environment, install both requirements files and run from
-`backend/`:
+### Frontend on your host
 
-```powershell
-python -m pip install -r requirements.txt -r requirements-test.txt
-python -m unittest discover -s tests -p test_api.py -v
-```
-
-For real PostgreSQL/Redis integration, first start the API as above, then run:
-
-```powershell
-docker compose -f compose.yaml -f compose.test.yaml run --rm --build --no-deps -e RUN_API_INTEGRATION=1 api python -m unittest discover -s tests -p test_api_integration.py -v
-```
-
-The integration test creates and deletes its own note, checks committed data
-through a second application instance, and verifies Redis write activity.
-It does not reset existing data or counters. It is skipped unless explicitly
-enabled. The 13 isolated HTTP tests passed during implementation, along with
-Python syntax, dependency compatibility and Compose configuration checks. Live
-PostgreSQL/Redis integration and Docker image builds also passed during Step 5.
-
-References: [FastAPI testing](https://fastapi.tiangolo.com/tutorial/testing/) and
-[FastAPI error handling](https://fastapi.tiangolo.com/tutorial/handling-errors/).
-
-## Step 4: React notes interface
-
-The responsive notebook interface includes:
-
-- A sidebar with saved notes and case-insensitive title/content search.
-- A title field and content editor with the API's length limits.
-- Create, edit and delete actions with loading and error states.
-- An unsaved-edits indicator and confirmation when switching away from a draft.
-- Browser leave/reload protection while there are unsaved edits.
-- Delete confirmation and a retry button when the initial notes request fails.
-- Draft preservation after failed saves, and optional activity information.
-- Protection against stale saves/deletes from another tab, with draft copying
-  and confirmed reload recovery.
-
-The frontend uses relative `/api` requests. In Docker, Nginx serves the React
-production build and forwards `/api/` to `api:8000`. In development, Vite proxies
-those requests to the same backend service. There are no database credentials
-in browser code. Fonts fall back to installed system fonts without requiring an
-external font service.
-
-### Run the complete stack
-
-From the project root, with `.env` configured and Docker Desktop running:
-
-```powershell
-docker compose up --build -d --wait
-docker compose ps -a
-```
-
-Open <http://localhost:8080>. To edit frontend and backend source with live reload:
-
-```powershell
-docker compose -f compose.yaml -f compose.dev.yaml up --build
-```
-
-The development browser address is also <http://localhost:8080>; the override
-maps the host web port to Vite's container port 5173. Changing package dependencies
-requires rebuilding the frontend image; source edits update through bind mounts.
-
-### Run the frontend outside Docker
-
-Requires Node.js 22 and a running API at <http://localhost:8000>.
-From `frontend/`:
-
-```powershell
-npm ci
-npm run dev
-```
-
-Open <http://localhost:5173>. If the API runs elsewhere, configure the Vite
-server-side proxy target before starting it:
-
-```powershell
-$env:VITE_API_PROXY_TARGET = 'http://localhost:8000'
-npm run dev
-```
-
-This value configures the development proxy; it is not a database credential or
-a production browser setting. The production Nginx proxy uses the Compose API
-service. A failed initial API request displays an error with a retry action.
-
-### Build and browser checks
-
-```powershell
-npm run build
-npx playwright install chromium
-npm test
-```
-
-Alternatively, use an installed Chrome browser without downloading Chromium:
-
-```powershell
-$env:PLAYWRIGHT_CHANNEL = 'chrome'
-npm test
-```
-
-Playwright starts and stops its own Vite server on port 5173. Tests use controlled
-API responses and do not require PostgreSQL or Redis. They cover CRUD, search,
-reload, discard confirmation, failed-save recovery, failed-load retry, activity
-failure, title validation, desktop rendering and mobile overflow. The tests do
-not prove real database persistence; use the Step 2/3 integration checks and
-the full-stack checklist below for that.
-
-The production build and all 8 browser tests passed during Step 4, with desktop
-and mobile screenshots inspected. npm reported no known dependency vulnerabilities
-at implementation time. `package-lock.json` is committed and Docker uses `npm ci`.
-Rollup is pinned to `4.63.6`: the resolved `4.64.0` version stalled during builds
-on this workstation, while the pinned version completed successfully.
-
-### Real Docker browser checks
-
-Step 5 adds a separate browser suite using the production frontend and real API.
-It runs without Vite or mocked requests; see the commands below.
-
-Reference: [Playwright API mocking](https://playwright.dev/docs/mock).
-
-## Step 5: automated Docker integration and persistence verification
-
-See [the verification results](docs/step-5-verification.md) for the completed run.
-
-Run from the project root using **PowerShell 7+** (`pwsh`) and Docker Desktop:
-
-```powershell
-# All Docker/backend and HTTP persistence checks; no local Python or Node needed.
-pwsh -File ./scripts/verify-stack.ps1
-
-# Also test the real browser UI. Requires Node.js 22 and installed Google Chrome.
-$env:PLAYWRIGHT_CHANNEL = 'chrome'
-pwsh -File ./scripts/verify-stack.ps1 -BrowserTests
-
-# Choose unused ports if the default verification ports are occupied.
-pwsh -File ./scripts/verify-stack.ps1 -WebPort 28080 -ApiPort 28000
-```
-
-The script creates a uniquely named `notes-check-<random>` Compose project with
-its own credentials, network, containers and volumes. It uses ports 18080/18000
-by default, checks for conflicts, and overrides ambient database/port values
-only for its process. It leaves your regular `notes-app` containers and notes
-untouched. Temporary environment values are restored after the run.
-
-The verification covers:
-
-1. Production image builds, startup health checks, migrations and Nginx syntax.
-2. API contract/security tests, real PostgreSQL tests, ASGI body-limit/timeout
-   tests, and real API/Redis integration inside the backend test image.
-3. HTTP requests through Nginx: dependency health, React HTML, missing-asset 404,
-   create, update and delete, plus the Redis write count.
-4. Removal and recreation of all test containers **without removing volumes**.
-   The PostgreSQL container ID must change while the saved note, original creation
-   timestamp and Redis count stay intact. Re-running migrations must succeed.
-5. With `-BrowserTests`: request-helper tests and real browser tests covering
-   create/edit/search/reload/delete, PostgreSQL reads, Redis activity, dependency
-   health, JavaScript delivery, production security/cache headers and two-tab
-   edit conflict protection.
-
-On success or failure, cleanup removes **only that run's temporary containers,
-network and volumes**. Shared base images and build caches remain available.
-Failed Docker checks print recent container logs; failed browser checks retain
-screenshots and traces under `frontend/test-results/`. A cleanup failure is
-reported as an error with the temporary project name. An interrupted/killed
-process may require manual cleanup of that project.
-
-You can also run the browser suite against your existing running stack:
+With Node.js 22 installed and the API running on port 8000:
 
 ```powershell
 Set-Location frontend
 npm ci
-$env:PLAYWRIGHT_CHANNEL = 'chrome'
-$env:NOTES_E2E_BASE_URL = 'http://127.0.0.1:8080'
-npm run test:live
+npm run dev
 ```
 
-This suite creates and removes only its own uniquely titled note. It increments
-the real Redis activity counter. To use Playwright's bundled Chromium instead
-of Chrome, install it with `npx playwright install chromium` and unset
-`PLAYWRIGHT_CHANNEL`. Existing mocked browser tests remain available with
-`npm test`; they are separate from the live suite.
+Open [localhost:5173](http://localhost:5173/). For a different API address, set `VITE_API_PROXY_TARGET` before starting Vite. Run subsequent repository-root commands after returning with `Set-Location ..`.
 
-References: [Compose startup and health waits](https://docs.docker.com/reference/cli/docker/compose/up/),
-[Compose teardown and volume behavior](https://docs.docker.com/reference/cli/docker/compose/down/),
-and [Playwright configuration](https://playwright.dev/docs/test-configuration).
+## Docker commands
 
-## Phase 6: CI/CD and versioned Docker releases
+Run these from the repository root:
 
-Pushes, pull requests and manual runs now verify dependencies, frontend/backend
-tests, the complete Docker stack and recovery. Successful main runs deliver a
-versioned Docker image bundle, tested without source folders or registry pulls.
-See [Phase 6 setup and commands](docs/phase-6-ci-cd.md) and
-[running a release bundle](docs/release-bundle.md).
+| Task | Command |
+| --- | --- |
+| Validate configuration without starting | `docker compose config --quiet` |
+| Build and start everything | `docker compose up -d --build --wait` |
+| Show running and completed services | `docker compose ps -a` |
+| Check app health and resource usage | `./scripts/status.ps1` |
+| Follow API/web logs | `docker compose logs -f --tail 100 api web` |
+| Inspect resource usage once | `docker compose stats --no-stream` |
+| Open a backend shell | `docker compose exec api sh` |
+| Test Redis connectivity | `docker compose exec redis redis-cli ping` |
+| Show the applied migration | `docker compose run --rm migrate alembic current` |
+| Restart the API process | `docker compose restart api` |
+| Stop containers without removing them | `docker compose stop` |
+| Remove containers/network, keep volumes | `docker compose down` |
+| Inspect local images and disk usage | `docker image ls` / `docker system df` |
 
-## Phase 7: backup and recovery
+`restart` does not apply changed Compose settings or rebuild code. Use `up -d --build --wait` after changing images/configuration. For database inspection, additional commands and troubleshooting, see the [implementation guide](docs/implementation-guide.md) and [operations runbook](docs/phase-8-operations.md).
+
+## API
+
+| Method | Endpoint | Result |
+| --- | --- | --- |
+| GET | `/api/notes` | List notes by most recent update |
+| GET | `/api/notes/{id}` | Read one note |
+| POST | `/api/notes` | Create a note; returns `201`, `Location` and `ETag` |
+| PUT | `/api/notes/{id}` | Replace title/content; returns the updated note and `ETag` |
+| DELETE | `/api/notes/{id}` | Delete a note; returns `204` |
+| GET | `/api/stats` | Redis write count and availability |
+| GET | `/api/health` | Dependency health; `503` if a dependency is unavailable |
+
+Titles must contain non-whitespace text and be at most 200 characters. Content is limited to 50,000 characters. Unknown fields and null characters are rejected. The browser uses note versions to prevent overwriting newer edits; stale `If-Match` values receive `412`.
+
+This optional example creates, updates and deletes **one demo note** through Nginx. Use the response ETag unchanged, since PowerShell may convert JSON timestamps to `DateTime`:
+
+```powershell
+$api = 'http://localhost:8080/api'
+$body = @{ title = 'Docker demo'; content = 'My services work together.' } | ConvertTo-Json
+$note = Invoke-RestMethod "$api/notes" -Method Post -ContentType application/json -Body $body -ResponseHeadersVariable createdHeaders
+
+Invoke-RestMethod "$api/notes/$($note.id)"
+$etag = [string]@($createdHeaders['ETag'])[0]
+$body = @{ title = 'Docker demo'; content = 'Updated safely.' } | ConvertTo-Json
+Invoke-RestMethod "$api/notes/$($note.id)" -Method Put -ContentType application/json -Headers @{ 'If-Match' = $etag } -Body $body -ResponseHeadersVariable updatedHeaders
+
+$etag = [string]@($updatedHeaders['ETag'])[0]
+Invoke-RestMethod "$api/notes/$($note.id)" -Method Delete -Headers @{ 'If-Match' = $etag }
+```
+
+Successful create/update/delete operations increment Redis **after** the PostgreSQL commit. Redis outages can cause missed counts without undoing saved notes. Recovery starts Redis empty; its counter is not the durable record of your notes.
+
+## Testing
+
+Most verification scripts use a disposable Compose project with separate credentials, ports and volumes. Cleanup removes that project's data and restores temporary shell variables; interruption or teardown failure can require manual cleanup of the named test project.
+
+### Docker checks — no host Node or Python needed
+
+```powershell
+./scripts/verify-stack.ps1       # API, database, Redis, proxy and volume persistence
+./scripts/verify-recovery.ps1    # Restore notes and reject a corrupt backup
+./scripts/verify-load.ps1        # Concurrent CRUD, conflicts, counters and resource settings
+./scripts/verify-dev.ps1         # Vite transforms, proxy writes and development status
+```
+
+The default load test runs four workers through 100 note lifecycles, including 705 requests, with a configurable 2-second p95 threshold. It operates only on a marked disposable project. Measurements depend on hardware and are regression checks, not a production capacity guarantee.
+
+### Browser checks
+
+Requires Node.js 22. Install Playwright Chromium, then return to the root for the isolated real-stack browser suite:
+
+```powershell
+Set-Location frontend
+npm ci
+npx playwright install chromium
+npm run test:unit
+npm test
+Set-Location ..
+./scripts/verify-stack.ps1 -BrowserTests
+```
+
+Alternatively, use an installed Chrome browser with `$env:PLAYWRIGHT_CHANNEL = 'chrome'`. Mocked tests (`npm test`) use controlled API responses; the live suite verifies real Docker services. Running `npm run test:live` directly against your normal app creates/deletes a test note and increments its real activity counter.
+
+### Script safety checks
+
+```powershell
+./scripts/test-docker-tools.ps1
+./scripts/test-phase8.ps1
+# Optional host Python check; also runs automatically in CI:
+python scripts/test_load_test.py
+```
+
+## CI and release bundles
+
+[GitHub Actions](https://github.com/SriVishnu230707/notes-app-docker-documentation/actions/workflows/ci.yml) runs on pushes to `main`, pull requests and manual dispatch. It checks dependency advisories, frontend/backend tests, persistence, recovery, load, development and script failure paths.
+
+A successful main-branch run exports version-tagged application images plus PostgreSQL and Redis, verifies archive/image checksums and tests startup with **no builds or registry pulls**. Download `notes-release-<commit>` from that run's artifacts. The bundle includes Compose files, example configuration, image tags, a manifest and `README.md`/`OPERATIONS.md` instructions. Load reports are separate artifacts.
+
+Artifacts expire after **14 days**. Keep a private copy of releases you need. Release export requires committed application/configuration files and a revision matching Git HEAD. CI delivers a tested bundle; it does not deploy to a public server.
+
+See [CI/CD details](docs/phase-6-ci-cd.md) and [bundle startup instructions](docs/release-bundle.md).
+
+## Backup and recovery
+
+From the repository root, with your normal stack running:
 
 ```powershell
 $backup = ./scripts/backup.ps1
+$backup.ArchivePath
+
+# Test restoration, then remove the temporary recovered stack.
 ./scripts/restore.ps1 -BackupPath $backup.ArchivePath -VerifyOnly
-./scripts/verify-recovery.ps1
+
+# Or leave a separate recovered app running for inspection.
+$copy = ./scripts/restore.ps1 -BackupPath $backup.ArchivePath
+$copy.WebUrl
+$copy.ProjectName
 ```
 
-Backups include PostgreSQL notes and a checksum manifest. Restore uses a
-separate project; omit `-VerifyOnly` to inspect the recovered app on port 19080.
-Redis activity resets in recovered copies. See [the recovery runbook](docs/phase-7-backup-recovery.md).
+Backup produces a PostgreSQL custom-format dump plus a SHA256/size manifest in ignored `backups/`. Keep both files together. Restoration creates a **separate project**, normally on web/API ports `19080`/`19000`, runs migrations and preserves the regular app. Its Redis activity counter starts empty.
 
-## Phase 8: operational readiness and final handoff
+The backup files contain your notes and are not encrypted or signed. Keep trusted backup pairs in private storage outside the laptop. For custom ports, retained recovery credentials and cleanup commands, follow the [backup/recovery runbook](docs/phase-7-backup-recovery.md).
 
-The full eight-phase project is complete for local operation. Containers have
-CPU/memory/process ceilings and rotated logs. A disposable concurrent-load
-test checks CRUD, edit conflicts, Redis counts and Engine resource settings.
+## Troubleshooting
 
-```powershell
-./scripts/status.ps1
-./scripts/verify-load.ps1
+| Problem | What to check |
+| --- | --- |
+| Docker engine connection fails | Start Docker Desktop in Linux-container mode; run `docker version` |
+| Host port is occupied | Change `WEB_PORT`/`API_PORT`, or choose unused ports for verification scripts |
+| Database login fails after editing `.env` | Existing volumes retain their original credentials; restore the matching settings |
+| API does not start | Inspect `docker compose logs --tail 100 migrate api db redis` |
+| Status reports unhealthy services | Check container health/logs; health checks do not automatically restart an unhealthy process |
+| Browser write returns `403` | Use the local web URL; browser Origin and proxy Host must match |
+| Save/delete returns `412` | Another edit changed the note; reload saved notes or preserve the draft as a new note |
+| Save times out | The server may have committed it; reload notes before retrying |
+| Load test fails | Inspect its `test-results/notes-load-*/report.json`, logs and resource settings |
+
+More diagnosis, upgrade and rollback commands are in the [operations runbook](docs/phase-8-operations.md#troubleshooting).
+
+## Project layout
+
+```text
+.
+├── backend/
+│   ├── app/                    # Routes, request security, database and repository
+│   ├── migrations/             # Alembic revisions
+│   ├── tests/                  # API, database and security checks
+│   └── Dockerfile              # Production and test targets
+├── frontend/
+│   ├── src/                    # React interface and API client
+│   ├── tests/                  # Mocked browser checks
+│   ├── live-tests/             # Browser checks against the running stack
+│   ├── unit/                   # Request-helper checks
+│   ├── Dockerfile              # Vite build/dev and Nginx production targets
+│   └── nginx.conf              # Production proxy and asset routing
+├── scripts/                    # Verification, status, releases, backup and restore
+├── docs/                       # Detailed implementation and operations guides
+├── .github/workflows/ci.yml     # Verification and release pipeline
+├── compose.yaml                # Default production stack
+├── compose.dev.yaml            # Source reload override
+├── compose.test.yaml           # Backend test-image override
+├── compose.release.yaml        # Loaded-image release override
+└── .env.example                # Shareable configuration template
 ```
 
-See [the final operations runbook](docs/phase-8-operations.md) for monitoring,
-troubleshooting, upgrades, rollback and the complete phase lineup.
-See [Phase 8 verification results](docs/phase-8-verification.md) for the local
-load measurements and data-preservation checks.
-See [the Phase 8 debug review](docs/phase-8-debug-review.md) for project-specific
-status, load-generator guards, report validation and development-profile fixes.
+## Guides
 
-## Error review and regression checks
+| Guide | Contents |
+| --- | --- |
+| [Implementation walkthrough](docs/implementation-guide.md) | Original detailed build steps, schema, Docker concepts and commands |
+| [CI/CD](docs/phase-6-ci-cd.md) | Pipeline, release export and delivery |
+| [Release bundle](docs/release-bundle.md) | Run packaged images without source installations |
+| [Backup and recovery](docs/phase-7-backup-recovery.md) | Backup pairs, restoration and recovery-copy cleanup |
+| [Operations](docs/phase-8-operations.md) | Resources, status, troubleshooting, upgrades and rollback |
+| [Security and logic review](docs/security-and-logic-review.md) | Request protections and concurrent-edit handling |
+| [Phase 6/7 debug review](docs/phase-6-7-debug-review.md) | Release validation and cleanup failure paths |
+| [Phase 8 debug review](docs/phase-8-debug-review.md) | Status isolation, guarded load testing and development fixes |
+| [Verification results](docs/phase-8-verification.md) | Recorded local load/resource measurements; current CI results are on Actions |
 
-See [the Phase 6/7 debug review](docs/phase-6-7-debug-review.md) for release
-metadata validation, cleanup error reporting and revision guards. Run
-`./scripts/test-docker-tools.ps1` for the Docker-stub failure-path checks.
+### Completed project phases
 
-See [the security and logic review](docs/security-and-logic-review.md) for the
-subsequent request protections, runtime updates and concurrent-edit fixes.
-
-See [the error review](docs/error-review.md) for the cross-layer fixes and
-verification limits. Request-helper checks can now be run from `frontend/` with
-`npm run test:unit`, alongside the browser tests. HTTP requests have a 15-second
-timeout, and successful responses are validated before being rendered.
-
-If a write times out or its connection is interrupted, the server may have
-committed it. The interface preserves the draft and asks you to reload notes
-before retrying; it does not retry mutations automatically. If a saved note has
-been deleted elsewhere, use **Keep draft as a new note** to preserve your edits.
-
-Application PostgreSQL connections now use a 10-second statement timeout and a
-5-second lock timeout. Migration connections keep their separate configuration.
-API validation rejects null characters in note strings before PostgreSQL sees
-them. The backend pins a compatible patched FastAPI/Starlette pair, and API
-tests use HTTPX2. Rebuild the backend image to apply dependency changes.
+| Phase | Delivered |
+| --- | --- |
+| 1 | Compose configuration, network, environment and persistent volumes |
+| 2 | Backend image, PostgreSQL schema and Alembic migrations |
+| 3 | FastAPI CRUD and Redis activity |
+| 4 | React interface and Nginx proxy |
+| 5 | Docker/browser/persistence verification |
+| 6 | CI/CD and verified Docker release bundles |
+| 7 | Checksummed backups and isolated recovery |
+| 8 | Resource/log limits, concurrent-load verification and operations handoff |
