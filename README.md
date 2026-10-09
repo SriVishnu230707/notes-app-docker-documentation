@@ -11,6 +11,9 @@ The repository also demonstrates the complete Docker workflow: images, networkin
 ## Features
 
 - Create, edit, delete and search notes by title or content.
+- Sort notes by latest edit, creation date or title; search ignores surrounding spaces.
+- Download the current note or unsaved draft as a Markdown file.
+- Track word counts and title/content limits; use Ctrl/⌘ + S to save and Ctrl/⌘ + K to search.
 - Preserve drafts after failed saves and confirm before discarding unsaved edits.
 - Detect stale saves/deletes across browser tabs with note versions and `If-Match`.
 - Keep notes in PostgreSQL volumes and track successful mutations in Redis.
@@ -18,6 +21,8 @@ The repository also demonstrates the complete Docker workflow: images, networkin
 - Run production and development setups with the same service network.
 - Verify application flows, persistence, recovery and concurrent requests in GitHub Actions.
 - Export a tested Docker image bundle that starts without source code or registry pulls.
+
+**Download Markdown** exports the editor's current contents, including unsaved changes. It does not save to the database or replace the full backup/recovery workflow below.
 
 ## Quick start
 

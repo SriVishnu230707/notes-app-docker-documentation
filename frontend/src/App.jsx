@@ -7,6 +7,7 @@ export default function App() {
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [search, setSearch] = useState('');
+  const [sort, setSort] = useState('updated');
   const [error, setError] = useState('');
   const [missingNote, setMissingNote] = useState(false);
   const [conflict, setConflict] = useState(false);
@@ -16,8 +17,26 @@ export default function App() {
   const [writes, setWrites] = useState(null);
   const [message, setMessage] = useState('');
   const titleField = useRef(null);
+  const searchField = useRef(null);
+  const saveButton = useRef(null);
   const mutationInFlight = useRef(false);
   const focusPending = useRef(false);
+
+  useEffect(() => {
+    const shortcuts = (event) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.isComposing) return;
+      if (event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        if (!event.repeat) saveButton.current?.click();
+      } else if (event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        searchField.current?.focus();
+        searchField.current?.select();
+      }
+    };
+    window.addEventListener('keydown', shortcuts);
+    return () => window.removeEventListener('keydown', shortcuts);
+  }, []);
 
   useEffect(() => {
     if (focusPending.current && !busy && !loading && !loadError) {
@@ -83,7 +102,7 @@ export default function App() {
 
   async function save(event) {
     event.preventDefault();
-    if (mutationInFlight.current || conflict || !title.trim()) return;
+    if (mutationInFlight.current || loading || loadError || conflict || !dirty || !title.trim()) return;
     mutationInFlight.current = true;
     setBusy(true); setError(''); setMissingNote(false); setMessage('');
     try {
@@ -130,7 +149,27 @@ export default function App() {
     await loadNotes();
   }
 
-  const filtered = notes.filter(note => `${note.title} ${note.content}`.toLowerCase().includes(search.toLowerCase()));
+  function downloadNote() {
+    const markdown = `# ${title.trim() || 'Untitled idea'}\n\n${content}\n`;
+    const url = URL.createObjectURL(new Blob([markdown], { type: 'text/markdown;charset=utf-8' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'notebook-note.md';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setMessage(dirty ? 'Draft downloaded. Changes are still unsaved.' : 'Note downloaded.');
+  }
+
+  const query = search.trim().toLowerCase();
+  const filtered = notes.filter(note => `${note.title} ${note.content}`.toLowerCase().includes(query))
+    .sort((a, b) => {
+      if (sort === 'title') return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+      const field = sort === 'created' ? 'created_at' : 'updated_at';
+      return Date.parse(b[field]) - Date.parse(a[field]) || a.id.localeCompare(b.id);
+    });
+  const wordCount = content.trim() ? content.trim().split(/\s+/u).length : 0;
   return <div className="shell">
     <aside>
       <button className="brand" type="button" onClick={() => open()} disabled={busy || loading} aria-label="Notebook home">
@@ -139,8 +178,19 @@ export default function App() {
       <p className="eyebrow">YOUR SPACE TO THINK</p>
       <button className="new-note" disabled={busy || loading} onClick={() => open()}>＋ New note</button>
       <label className="search-label" htmlFor="search">Search your notes</label>
-      <input id="search" type="search" placeholder="Search anything…" value={search} onChange={e => setSearch(e.target.value)} />
-      <div className="list-heading">ALL NOTES <span>{notes.length}</span></div>
+      <div className="search-row">
+        <input ref={searchField} id="search" type="search" placeholder="Search anything…" value={search} onChange={e => setSearch(e.target.value)} aria-keyshortcuts="Control+k Meta+k" />
+        {search && <button className="clear-search" type="button" onClick={() => { setSearch(''); searchField.current?.focus(); }}>Clear search</button>}
+      </div>
+      <div className="sort-row">
+        <label htmlFor="sort">Sort notes</label>
+        <select id="sort" value={sort} onChange={e => setSort(e.target.value)}>
+          <option value="updated">Recently edited</option>
+          <option value="created">Newest created</option>
+          <option value="title">Title A–Z</option>
+        </select>
+      </div>
+      <div className="list-heading">{query ? 'SEARCH RESULTS' : 'ALL NOTES'} <span>{query ? `${filtered.length} of ${notes.length}` : notes.length}</span></div>
       <nav aria-label="Notes" aria-busy={loading}>
         {loading ? <p className="muted">Loading your notes…</p> : loadError ? <div>
           <p className="error" role="alert">{loadError}</p>
@@ -158,17 +208,20 @@ export default function App() {
       <form onSubmit={save} aria-label="Note editor" aria-busy={busy}>
         <div className="editor-top"><span className="eyebrow">{selected ? 'YOUR NOTE' : 'SOMETHING NEW'}</span><span className="muted">{dirty ? 'Unsaved changes' : selected ? 'All changes saved' : 'Make room for an idea'}</span></div>
         <label className="sr-only" htmlFor="title">Note title</label>
-        <input ref={titleField} id="title" className="title" required maxLength={200} placeholder="Untitled idea" value={title} disabled={busy || loading || Boolean(loadError)} onChange={e => { setTitle(e.target.value); setMessage(''); }} />
+        <input ref={titleField} id="title" className="title" required maxLength={200} placeholder="Untitled idea" value={title} disabled={busy || loading || Boolean(loadError)} aria-describedby="title-count" onChange={e => { setTitle(e.target.value); setMessage(''); }} />
+        <span id="title-count" className="title-count">{title.length} / 200 title characters</span>
         <div className="rule" />
         <label className="sr-only" htmlFor="content">Note content</label>
         <textarea id="content" maxLength={50000} placeholder="Let your thoughts unfold here…" value={content} disabled={busy || loading || Boolean(loadError)} onChange={e => { setContent(e.target.value); setMessage(''); }} />
         {error && <p className="error" role="alert">{error}</p>}
         {(missingNote || conflict) && <button className="retry" type="button" disabled={busy} onClick={recoverDraft}>Keep draft as a new note</button>}
         {conflict && <button className="retry" type="button" disabled={busy} onClick={reloadConflict}>Reload saved notes</button>}
-        <div className="editor-bottom"><span role="status">{message || `${content.length.toLocaleString()} characters`}</span><div className="actions">
+        <div className="editor-bottom"><span role="status">{message || `${wordCount.toLocaleString()} words · ${content.length.toLocaleString()} / 50,000 characters`}</span><div className="actions">
+          <button className="download" type="button" disabled={busy || loading || Boolean(loadError) || !(title || content)} onClick={downloadNote}>Download Markdown</button>
           {selected && <button className="delete" type="button" disabled={busy || conflict} onClick={remove}>Delete</button>}
-          <button className="save" disabled={busy || conflict || loading || Boolean(loadError) || !title.trim() || !dirty}>{busy ? 'Working…' : 'Save note ↗'}</button>
+          <button ref={saveButton} className="save" aria-keyshortcuts="Control+s Meta+s" disabled={busy || conflict || loading || Boolean(loadError) || !title.trim() || !dirty}>{busy ? 'Working…' : 'Save note ↗'}</button>
         </div></div>
+        <p className="keyboard-hint">Ctrl / ⌘ + S to save · Ctrl / ⌘ + K to search</p>
       </form>
       <div className="reflection">Small thoughts. Big possibilities.</div>
     </main>
